@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zenouser
+      POSTGRES_PASSWORD: zenopass
+      POSTGRES_DB: zenoledgr
+    ports:
+      - "5432:5432"
+    volumes:
+      - zeno_pg:/var/lib/postgresql/data
+      - ./init-local.sql:/docker-entrypoint-initdb.d/init-local.sql:ro
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://zenouser:zenopass@postgres:5432/zenoledgr
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-dev-change-me-use-your-supabase-jwt-secret}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+
+volumes:
+  zeno_pg:

@@ -1,0 +1,22 @@
+[
+  {
+    "pattern": "STARBUCKS",
+    "displayName": "Starbucks"
+  },
+  {
+    "pattern": "AMZN MKTP",
+    "displayName": "Amazon"
+  },
+  {
+    "pattern": "/paypal/i",
+    "displayName": "PayPal"
+  },
+  {
+    "pattern": "UBER TRIP",
+    "displayName": "Uber"
+  },
+  {
+    "pattern": "WHOLEFDS",
+    "displayName": "Whole Foods"
+  }
+]
