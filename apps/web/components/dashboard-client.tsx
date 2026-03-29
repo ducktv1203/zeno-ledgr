@@ -40,13 +40,12 @@ import {
 } from "@/lib/crypto";
 import type { MerchantWikiEntry } from "@/lib/refiner";
 import { refineMerchant } from "@/lib/refiner";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserSupabase } from "@/lib/supabase/client";
 
 const wikiEntries = wiki as MerchantWikiEntry[];
 
 function apiBase(): string {
-  const u = process.env.NEXT_PUBLIC_API_URL;
-  if (!u) throw new Error("NEXT_PUBLIC_API_URL is not set");
+  const u = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
   return u.replace(/\/$/, "");
 }
 
@@ -74,7 +73,7 @@ type Row = {
 };
 
 export function DashboardClient() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => getBrowserSupabase(), []);
   const [sessionReady, setSessionReady] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [email, setEmail] = useState("");
@@ -97,6 +96,10 @@ export function DashboardClient() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (!supabase) {
+      setSessionReady(true);
+      return;
+    }
     supabase.auth.getSession().then(({ data }) => {
       setAccessToken(data.session?.access_token ?? null);
       setSessionReady(true);
@@ -177,6 +180,7 @@ export function DashboardClient() {
 
   async function signIn(e: React.FormEvent) {
     e.preventDefault();
+    if (!supabase) return;
     setAuthError(null);
     const { error } = await supabase.auth.signInWithPassword({
       email,
@@ -186,6 +190,7 @@ export function DashboardClient() {
   }
 
   async function signUpClick() {
+    if (!supabase) return;
     setAuthError(null);
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) setAuthError(error.message);
@@ -196,7 +201,7 @@ export function DashboardClient() {
     setEncryptionActive(false);
     setRows([]);
     setSaltB64(null);
-    await supabase.auth.signOut();
+    if (supabase) await supabase.auth.signOut();
   }
 
   async function unlock(e: React.FormEvent) {
@@ -258,6 +263,23 @@ export function DashboardClient() {
   if (!sessionReady) {
     return (
       <p className="text-muted-foreground text-sm">Loading session…</p>
+    );
+  }
+
+  if (!supabase) {
+    return (
+      <Card className="max-w-lg border-zinc-800 bg-zinc-950/50">
+        <CardHeader>
+          <CardTitle>Configure Supabase</CardTitle>
+          <CardDescription>
+            Add{" "}
+            <code className="text-xs">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
+            <code className="text-xs">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to{" "}
+            <code className="text-xs">apps/web/.env.local</code> (see root{" "}
+            <code className="text-xs">.env.example</code>), then reload.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     );
   }
 
