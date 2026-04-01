@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
-    "lint": "pnpm --filter web lint"
+    "lint": "pnpm --filter web lint",
+    "api:dev": "cd apps/api && python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
   },
   "packageManager": "pnpm@9.15.0"
 }

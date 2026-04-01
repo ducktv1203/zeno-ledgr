@@ -357,8 +357,10 @@ export function DashboardClient() {
         <CardHeader>
           <CardTitle>Master password</CardTitle>
           <CardDescription>
-            PBKDF2 (600k) + AES-256-GCM in the browser. The key stays in memory;
-            the server only sees ciphertext.
+            PBKDF2 (600k) + AES-256-GCM in the browser. The AES key is held in
+            memory for this tab session only (not persisted in sessionStorage);
+            sessionStorage may store a non-secret “active” flag for the UI. The
+            server only ever sees ciphertext.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
