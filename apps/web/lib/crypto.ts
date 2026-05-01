@@ -65,6 +65,12 @@ function utf8Decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const out = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(out).set(bytes);
+  return out;
+}
+
 /** Decode salt from server (Base64) to ArrayBuffer for PBKDF2 */
 export function parseSaltBase64(saltB64: string): Uint8Array {
   return fromBase64(saltB64);
@@ -84,9 +90,11 @@ export async function deriveKeyFromPassword(
   salt: Uint8Array,
 ): Promise<CryptoKey> {
   const enc = utf8Encode(password);
+  const encBytes = new Uint8Array(enc);
+  const saltBytes = new Uint8Array(salt);
   const baseKey = await crypto.subtle.importKey(
     "raw",
-    enc,
+    toArrayBuffer(encBytes),
     "PBKDF2",
     false,
     ["deriveBits", "deriveKey"],
@@ -95,7 +103,7 @@ export async function deriveKeyFromPassword(
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt,
+      salt: toArrayBuffer(saltBytes),
       iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256",
     },
@@ -143,9 +151,9 @@ export async function encryptLedgerPayload(
   const plain = utf8Encode(JSON.stringify(payload));
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: toArrayBuffer(iv) },
     key,
-    plain,
+    toArrayBuffer(plain),
   );
 
   return {
@@ -163,9 +171,9 @@ export async function decryptLedgerPayload(
   const ciphertext = fromBase64(encryptedBlobB64);
 
   const plainBuf = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: toArrayBuffer(iv) },
     key,
-    ciphertext,
+    toArrayBuffer(ciphertext),
   );
 
   const json = utf8Decode(new Uint8Array(plainBuf));

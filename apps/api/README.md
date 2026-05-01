@@ -4,11 +4,12 @@ FastAPI backend for encrypted ledger blobs.
 
 ## Endpoints
 
-- `GET /health`
+- `GET /livez`
+- `GET /readyz`
 - `POST /crypto/init` — creates per-user non-secret PBKDF2 salt if missing
 - `GET /crypto/salt` — returns existing user salt
 - `POST /ingest` — stores `{ encrypted_blob, nonce }`
-- `GET /retrieve` — returns encrypted rows for authenticated user
+- `GET /retrieve?limit=50&cursor=<iso>` — returns paginated encrypted rows
 
 ## Local run
 
@@ -38,8 +39,13 @@ Copy-Item .env.example .env
 
 # bash
 cp .env.example .env
-DATABASE_URL=postgresql://zenouser:zenopass@localhost:5432/zenoledgr
-SUPABASE_JWT_SECRET=your-supabase-jwt-secret-from-project-settings
+ENV=development
+DATABASE_URL=postgresql://postgres:your-db-password@db.your-project-ref.supabase.co:5432/postgres?sslmode=require
+SUPABASE_JWT_VERIFY_MODE=jwks
+SUPABASE_JWKS_URL=https://your-project-ref.supabase.co/auth/v1/.well-known/jwks.json
+SUPABASE_JWT_ISSUER=https://your-project-ref.supabase.co/auth/v1
+SUPABASE_JWT_AUDIENCE=authenticated
+SUPABASE_JWT_SECRET=
 CORS_ORIGINS=http://localhost:3000
 ```
 
@@ -57,6 +63,6 @@ pnpm run api:dev
 
 ## Notes
 
-- JWT is validated using `SUPABASE_JWT_SECRET` (HS256 path in this MVP).
+- JWT defaults to JWKS verification for Supabase cloud. For local legacy HS256 testing, set `SUPABASE_JWT_VERIFY_MODE=hs256` and provide `SUPABASE_JWT_SECRET`.
 - API remains content-agnostic: it never stores plaintext merchant/amount/date fields.
 

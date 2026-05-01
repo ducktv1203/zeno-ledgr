@@ -1,29 +1,37 @@
 import secrets
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, UUID4
 
 from app.auth import get_current_user_id
 from app.config import settings
-from app.db import close_pool, get_pool
+from app.db import close_pool, get_pool, ping_database
 
 # --- Schemas (opaque blobs only; no amount/merchant fields) ---
 
 
 class IngestBody(BaseModel):
-    encrypted_blob: str = Field(..., min_length=1)
-    nonce: str = Field(..., min_length=1)
+    encrypted_blob: str = Field(..., min_length=24, max_length=16384)
+    nonce: str = Field(..., min_length=12, max_length=256)
 
 
 class LedgerRow(BaseModel):
-    id: str
+    id: UUID4
     encrypted_blob: str
     nonce: str
     created_at: str
+
+
+class IngestResponse(BaseModel):
+    id: UUID4
+
+
+class RetrieveResponse(BaseModel):
+    entries: list[LedgerRow]
+    next_cursor: str | None = None
 
 
 class SaltResponse(BaseModel):
@@ -53,9 +61,17 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+@app.get("/livez")
+async def livez() -> dict[str, str]:
+    return {"status": "alive"}
+
+
+@app.get("/readyz")
+async def readyz() -> dict[str, str]:
+    db_ok = await ping_database()
+    if not db_ok:
+        raise HTTPException(status_code=503, detail="Database not ready")
+    return {"status": "ready"}
 
 
 @app.get("/crypto/salt", response_model=SaltResponse)
@@ -100,11 +116,11 @@ async def init_crypto_salt(user_id: str = Depends(get_current_user_id)):
     return InitSaltResponse(password_salt=salt_b64, created=True)
 
 
-@app.post("/ingest", status_code=201)
+@app.post("/ingest", status_code=201, response_model=IngestResponse)
 async def ingest(
     body: IngestBody,
     user_id: str = Depends(get_current_user_id),
-) -> dict[str, Any]:
+) -> IngestResponse:
     pool = await get_pool()
     new_id = uuid.uuid4()
     async with pool.acquire() as conn:
@@ -118,28 +134,53 @@ async def ingest(
             body.encrypted_blob,
             body.nonce,
         )
-    return {"id": str(new_id)}
+    return IngestResponse(id=new_id)
 
 
-@app.get("/retrieve", response_model=list[LedgerRow])
-async def retrieve(user_id: str = Depends(get_current_user_id)) -> list[LedgerRow]:
+@app.get("/retrieve", response_model=RetrieveResponse)
+async def retrieve(
+    user_id: str = Depends(get_current_user_id),
+    limit: int = 50,
+    cursor: str | None = None,
+) -> RetrieveResponse:
+    safe_limit = max(1, min(limit, 200))
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, encrypted_blob, nonce, created_at
-            FROM public.ledger_entries
-            WHERE user_id = $1
-            ORDER BY created_at DESC
-            """,
-            uuid.UUID(user_id),
-        )
-    return [
+        if cursor:
+            rows = await conn.fetch(
+                """
+                SELECT id, encrypted_blob, nonce, created_at
+                FROM public.ledger_entries
+                WHERE user_id = $1 AND created_at < $2::timestamptz
+                ORDER BY created_at DESC
+                LIMIT $3
+                """,
+                uuid.UUID(user_id),
+                cursor,
+                safe_limit + 1,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT id, encrypted_blob, nonce, created_at
+                FROM public.ledger_entries
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                uuid.UUID(user_id),
+                safe_limit + 1,
+            )
+    has_more = len(rows) > safe_limit
+    page_rows = rows[:safe_limit]
+    entries = [
         LedgerRow(
-            id=str(r["id"]),
+            id=r["id"],
             encrypted_blob=r["encrypted_blob"],
             nonce=r["nonce"],
             created_at=r["created_at"].isoformat(),
         )
-        for r in rows
+        for r in page_rows
     ]
+    next_cursor = page_rows[-1]["created_at"].isoformat() if has_more and page_rows else None
+    return RetrieveResponse(entries=entries, next_cursor=next_cursor)
