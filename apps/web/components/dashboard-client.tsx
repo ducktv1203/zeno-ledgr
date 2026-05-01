@@ -73,12 +73,18 @@ type Row = {
 };
 
 export function DashboardClient() {
+  const [authMode, setAuthMode] = useState<"signIn" | "signUp">("signIn");
   const supabase = useMemo(() => getBrowserSupabase(), []);
   const [sessionReady, setSessionReady] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authInfo, setAuthInfo] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
 
   const [saltB64, setSaltB64] = useState<string | null>(null);
   const [masterPassword, setMasterPassword] = useState("");
@@ -182,18 +188,44 @@ export function DashboardClient() {
     e.preventDefault();
     if (!supabase) return;
     setAuthError(null);
+    setAuthInfo(null);
+    setAuthLoading(true);
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
-    if (error) setAuthError(error.message);
+    if (error) {
+      setAuthError(error.message);
+    }
+    setAuthLoading(false);
   }
 
-  async function signUpClick() {
+  async function signUp(e: React.FormEvent) {
+    e.preventDefault();
     if (!supabase) return;
     setAuthError(null);
+    setAuthInfo(null);
+    if (password.length < 8) {
+      setAuthError("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setAuthError("Password and confirm password do not match.");
+      return;
+    }
+    setAuthLoading(true);
     const { error } = await supabase.auth.signUp({ email, password });
-    if (error) setAuthError(error.message);
+    if (error) {
+      setAuthError(error.message);
+      setAuthLoading(false);
+      return;
+    }
+    setAuthLoading(false);
+    setAuthInfo(
+      "Sign-up successful. Check your email to confirm your account, then sign in.",
+    );
+    setAuthMode("signIn");
+    setConfirmPassword("");
   }
 
   async function signOut() {
@@ -287,14 +319,17 @@ export function DashboardClient() {
     return (
       <Card className="max-w-md border-zinc-800 bg-zinc-950/50">
         <CardHeader>
-          <CardTitle>Sign in</CardTitle>
+          <CardTitle>{authMode === "signIn" ? "Sign in" : "Create account"}</CardTitle>
           <CardDescription>
             Use Supabase Auth. Keys come from{" "}
             <code className="text-xs">.env.local</code>.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form className="space-y-4" onSubmit={signIn}>
+          <form
+            className="space-y-4"
+            onSubmit={authMode === "signIn" ? signIn : signUp}
+          >
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -308,26 +343,75 @@ export function DashboardClient() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="pw">Password</Label>
-              <Input
-                id="pw"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="pw"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete={authMode === "signIn" ? "current-password" : "new-password"}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </Button>
+              </div>
             </div>
+            {authMode === "signUp" ? (
+              <div className="space-y-2">
+                <Label htmlFor="cpw">Confirm password</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="cpw"
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    autoComplete="new-password"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowConfirmPassword((v) => !v)}
+                    aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                  >
+                    {showConfirmPassword ? "Hide" : "Show"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
             {authError ? (
               <p className="text-destructive text-sm">{authError}</p>
             ) : null}
-            <div className="flex gap-2">
-              <Button type="submit">Sign in</Button>
+            {authInfo ? (
+              <p className="text-emerald-400 text-sm">{authInfo}</p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" disabled={authLoading}>
+                {authLoading
+                  ? "Please wait…"
+                  : authMode === "signIn"
+                    ? "Sign in"
+                    : "Create account"}
+              </Button>
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => void signUpClick()}
+                onClick={() => {
+                  setAuthMode(authMode === "signIn" ? "signUp" : "signIn");
+                  setAuthError(null);
+                  setAuthInfo(null);
+                  setPassword("");
+                  setConfirmPassword("");
+                }}
+                disabled={authLoading}
               >
-                Sign up
+                {authMode === "signIn" ? "Need an account?" : "Back to sign in"}
               </Button>
             </div>
           </form>
