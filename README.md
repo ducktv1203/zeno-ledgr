@@ -10,7 +10,7 @@ ZenoLedgr is a privacy-first (PriFi) ledger MVP:
 ## Monorepo layout
 
 - `apps/web` — Next.js App Router frontend + shadcn-style UI
-- `apps/api` — FastAPI service for `/ingest`, `/retrieve`, and crypto salt endpoints
+- `apps/api` — FastAPI service for `/ingest`, paginated `/retrieve`, and crypto salt endpoints
 - `supabase/migrations` — SQL schema + RLS policies
 - `docker` — local Postgres + API orchestration
 
@@ -32,10 +32,12 @@ Copy `.env.example` values into app-specific env files:
 
 - `apps/api/.env`
   - `DATABASE_URL`
-  - `SUPABASE_JWT_SECRET`
+  - `SUPABASE_JWT_VERIFY_MODE=jwks`
+  - `SUPABASE_JWKS_URL`
+  - `SUPABASE_JWT_ISSUER`
+  - `SUPABASE_JWT_AUDIENCE`
+  - `SUPABASE_JWT_SECRET` (optional HS256 fallback only)
   - `CORS_ORIGINS=http://localhost:3000`
-
-Note: `SUPABASE_JWT_SECRET` must match your Supabase project JWT secret for token verification.
 
 ## 2) Install dependencies
 
@@ -90,9 +92,10 @@ For pure local Docker Postgres, `docker/init-local.sql` is auto-applied on first
 ## 5) Verify
 
 - Web: `http://localhost:3000`
-- Dashboard: `http://localhost:3000/dashboard`
+- Auth routes: `http://localhost:3000/signin`, `/signup`, `/verify`
+- Dashboard: `http://localhost:3000/dashboard` (protected)
 - Crypto self-test page (dev only): `http://localhost:3000/dev/crypto`
-- API health: `http://localhost:8000/health`
+- API liveness/readiness: `http://localhost:8000/livez`, `http://localhost:8000/readyz`
 
 ## Security model (MVP)
 
