@@ -350,10 +350,11 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
               onChange={(e) => void onStatementFile(e.target.files?.[0] ?? null)}
             />
             <p className="text-muted-foreground text-xs">
-              Sample:{" "}
-              <a className="underline underline-offset-2" href="/samples/sample-statement.pdf">
+              Sample sketch statement:{" "}
+              <a className="underline underline-offset-2" href="/samples/sample-statement.pdf" download>
                 sample-statement.pdf
-              </a>
+              </a>{" "}
+              (10 transactions)
             </p>
           </div>
 

@@ -188,8 +188,24 @@ export async function readPdfStatement(
       allLines.push(...pageLines);
     }
   } finally {
-    if (ocrWorker) await ocrWorker.terminate();
-    await pdf.destroy();
+    if (ocrWorker) {
+      try {
+        await ocrWorker.terminate();
+      } catch {
+        // ignore OCR shutdown errors
+      }
+    }
+    // pdf.js v6: PDFDocumentProxy has cleanup(); destroy() lives on the loading task.
+    try {
+      await pdf.cleanup();
+    } catch {
+      // ignore
+    }
+    try {
+      await loadingTask.destroy();
+    } catch {
+      // ignore
+    }
   }
 
   onProgress?.({ stage: "parsing", message: "Parsing transactions…" });
