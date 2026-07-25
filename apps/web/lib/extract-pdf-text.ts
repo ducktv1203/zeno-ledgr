@@ -113,8 +113,9 @@ async function ocrCanvas(
 }
 
 /**
- * Read a PDF in-browser: embedded text first, OCR any page that looks empty/scanned.
- * Set `forceOcr` to OCR every page (used when text parse finds zero transactions).
+ * Read a PDF in-browser.
+ * Pass 1: extract embedded text from every page (no page cap).
+ * Pass 2 (optional): OCR only when the whole document yields no usable transactions.
  */
 export async function readPdfStatement(
   data: ArrayBuffer,
@@ -139,53 +140,47 @@ export async function readPdfStatement(
   const forceOcr = Boolean(options?.forceOcr);
 
   try {
-    for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
-      onProgress?.({
-        stage: "reading",
-        message: `Reading page ${pageNum} of ${pageCount}…`,
-        page: pageNum,
-        pages: pageCount,
-      });
+    // Always pull text from every page first (33-page statements included).
+    if (!forceOcr) {
+      for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+        onProgress?.({
+          stage: "reading",
+          message: `Reading page ${pageNum} of ${pageCount}…`,
+          page: pageNum,
+          pages: pageCount,
+        });
+        const page = await pdf.getPage(pageNum);
+        const pageLines = await extractPageTextLines(page);
+        allLines.push(...pageLines);
+      }
+    }
 
-      const page = await pdf.getPage(pageNum);
-      let pageLines = forceOcr ? [] : await extractPageTextLines(page);
+    const textLooksEmpty = !pageLooksTransactional(allLines);
+    if (forceOcr || textLooksEmpty) {
+      if (typeof document === "undefined") {
+        onProgress?.({ stage: "parsing", message: "Parsing transactions…" });
+        return { lines: allLines, usedOcr, pageCount };
+      }
 
-      const needsOcr = forceOcr || !pageLooksTransactional(pageLines);
-      if (needsOcr && typeof document !== "undefined") {
-        if (!ocrWorker) {
-          onProgress?.({
-            stage: "ocr",
-            message: "Loading OCR engine (first time may take a moment)…",
-            page: pageNum,
-            pages: pageCount,
-          });
-          const { createWorker } = await import("tesseract.js");
-          ocrWorker = await createWorker("eng");
-        }
+      const { createWorker } = await import("tesseract.js");
+      ocrWorker = await createWorker("eng");
+      usedOcr = true;
+      allLines.length = 0;
 
+      for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
         onProgress?.({
           stage: "ocr",
           message: `OCR page ${pageNum} of ${pageCount}…`,
           page: pageNum,
           pages: pageCount,
         });
-
-        const canvas = await renderPageToCanvas(page, 2.2);
+        const page = await pdf.getPage(pageNum);
+        const canvas = await renderPageToCanvas(page, 2);
         const ocrLines = await ocrCanvas(canvas, ocrWorker);
         canvas.width = 0;
         canvas.height = 0;
-
-        if (
-          forceOcr ||
-          pageLooksTransactional(ocrLines) ||
-          ocrLines.length > pageLines.length
-        ) {
-          pageLines = ocrLines;
-          usedOcr = true;
-        }
+        allLines.push(...ocrLines);
       }
-
-      allLines.push(...pageLines);
     }
   } finally {
     if (ocrWorker) {
@@ -195,7 +190,6 @@ export async function readPdfStatement(
         // ignore OCR shutdown errors
       }
     }
-    // pdf.js v6: PDFDocumentProxy has cleanup(); destroy() lives on the loading task.
     try {
       await pdf.cleanup();
     } catch {
@@ -208,7 +202,11 @@ export async function readPdfStatement(
     }
   }
 
-  onProgress?.({ stage: "parsing", message: "Parsing transactions…" });
+  onProgress?.({
+    stage: "parsing",
+    message: `Parsing transactions from ${pageCount} page${pageCount === 1 ? "" : "s"}…`,
+    pages: pageCount,
+  });
   return { lines: allLines, usedOcr, pageCount };
 }
 

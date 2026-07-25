@@ -9,6 +9,7 @@ import {
   Receipt,
   CalendarDays,
   Upload,
+  Repeat,
 } from "lucide-react";
 import {
   Bar,
@@ -43,6 +44,7 @@ import {
   parseStatementFile,
   type ParsedStatementRow,
 } from "@/lib/parse-statement";
+import { detectSubscriptions } from "@/lib/detect-subscriptions";
 import { useLedger } from "@/features/ledger/use-ledger";
 
 type Props = {
@@ -172,6 +174,8 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       ),
     [ledger.rows],
   );
+
+  const subscriptions = useMemo(() => detectSubscriptions(ledger.rows), [ledger.rows]);
 
   return (
     <div className="space-y-6">
@@ -354,7 +358,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
               <a className="underline underline-offset-2" href="/samples/sample-statement.pdf" download>
                 sample-statement.pdf
               </a>{" "}
-              (10 transactions)
+              (12 payments — Netflix/Spotify repeat monthly)
             </p>
           </div>
 
@@ -372,24 +376,28 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
           {pendingRows.length > 0 ? (
             <div className="space-y-3">
               <p className="text-sm">
-                Previewing {pendingRows.length} row{pendingRows.length === 1 ? "" : "s"} (showing up
-                to 8).
+                Ready to import <strong>{pendingRows.length}</strong> payment
+                {pendingRows.length === 1 ? "" : "s"}
+                {parseWarnings.some((w) => w.startsWith("Read "))
+                  ? ""
+                  : ""}
+                . Preview shows the first {Math.min(12, pendingRows.length)}.
               </p>
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Merchant</TableHead>
-                    <TableHead>Amount</TableHead>
+                    <TableHead>Payment</TableHead>
                     <TableHead>Date</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pendingRows.slice(0, 8).map((row) => (
+                  {pendingRows.slice(0, 12).map((row) => (
                     <TableRow key={`${row.line}-${row.merchantRaw}-${row.date}`}>
                       <TableCell className="max-w-[280px] truncate font-mono text-xs">
                         {row.merchantRaw}
                       </TableCell>
-                      <TableCell>{row.amount}</TableCell>
+                      <TableCell>${row.amount}</TableCell>
                       <TableCell>{row.date}</TableCell>
                     </TableRow>
                   ))}
@@ -427,10 +435,69 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       <Card className="app-surface rounded-2xl">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <CalendarDays className="h-4 w-4" />
-            Ledger entries
+            <Repeat className="h-4 w-4" />
+            Subscriptions
           </CardTitle>
-          <CardDescription>Refined merchant labels are computed locally.</CardDescription>
+          <CardDescription>
+            Recurring bills only (Netflix, YouTube, Spotify…). Groceries, transit, and Afterpay stay
+            in Payments — not listed here. Grouping is local from your decrypted ledger.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!encryptionActive ? (
+            <p className="text-muted-foreground text-sm">Unlock to detect subscriptions.</p>
+          ) : subscriptions.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              No subscriptions detected yet. You need at least two similar charges for the same
+              service (e.g. YouTube in June and July).
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Subscription</TableHead>
+                  <TableHead>Payment</TableHead>
+                  <TableHead>Cadence</TableHead>
+                  <TableHead>First purchase</TableHead>
+                  <TableHead>Last charged</TableHead>
+                  <TableHead>Next expected</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {subscriptions.map((s) => (
+                  <TableRow key={`${s.service}-${s.amount}-${s.firstPurchaseDate}`}>
+                    <TableCell>
+                      <div className="font-medium">{s.service}</div>
+                      <div className="text-muted-foreground text-xs">
+                        {s.chargeCount} charge{s.chargeCount === 1 ? "" : "s"} · {s.confidence}{" "}
+                        confidence
+                        {s.rawMerchants.length > 1
+                          ? ` · ${s.rawMerchants.length} bank labels merged`
+                          : ""}
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">${s.amount}</TableCell>
+                    <TableCell className="capitalize">{s.cadence}</TableCell>
+                    <TableCell>{s.firstPurchaseDate}</TableCell>
+                    <TableCell>{s.lastChargeDate}</TableCell>
+                    <TableCell>{s.nextExpectedDate ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="app-surface rounded-2xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarDays className="h-4 w-4" />
+            Payments
+          </CardTitle>
+          <CardDescription>
+            Each row is a payment: merchant + amount + transaction date (from your statement).
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {ledger.loadError ? (
@@ -439,33 +506,33 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Display</TableHead>
-                <TableHead>Raw</TableHead>
-                <TableHead>Amount</TableHead>
+                <TableHead>Merchant</TableHead>
+                <TableHead>Payment</TableHead>
                 <TableHead>Date</TableHead>
-                <TableHead>Created</TableHead>
+                <TableHead>Imported</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {ledger.rows.length === 0 && !ledger.loadingRows ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground text-center">
-                    No entries yet.
+                  <TableCell colSpan={4} className="text-muted-foreground text-center">
+                    No payments yet.
                   </TableCell>
                 </TableRow>
               ) : null}
               {ledger.rows.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell>
-                    {row.merchantDisplay}
+                    <div className="font-medium">{row.merchantDisplay}</div>
                     {row.merchantMatched ? (
-                      <span className="text-muted-foreground ml-2 text-xs">(wiki)</span>
-                    ) : null}
+                      <div className="text-muted-foreground text-xs">matched locally</div>
+                    ) : (
+                      <div className="text-muted-foreground max-w-[240px] truncate font-mono text-xs">
+                        {row.merchantRaw}
+                      </div>
+                    )}
                   </TableCell>
-                  <TableCell className="max-w-[200px] truncate font-mono text-xs">
-                    {row.merchantRaw}
-                  </TableCell>
-                  <TableCell>{row.amount}</TableCell>
+                  <TableCell className="font-mono text-sm">${row.amount}</TableCell>
                   <TableCell>{row.date}</TableCell>
                   <TableCell className="text-muted-foreground text-xs">
                     {new Date(row.createdAt).toLocaleString()}

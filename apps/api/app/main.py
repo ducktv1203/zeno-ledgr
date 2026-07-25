@@ -1,6 +1,7 @@
 import secrets
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from app.local_auth import router as local_auth_router
 class IngestBody(BaseModel):
     encrypted_blob: str = Field(..., min_length=24, max_length=16384)
     nonce: str = Field(..., min_length=12, max_length=256)
+    statement_id: UUID4 | None = None
 
 
 class LedgerRow(BaseModel):
@@ -24,6 +26,7 @@ class LedgerRow(BaseModel):
     encrypted_blob: str
     nonce: str
     created_at: str
+    statement_id: UUID4 | None = None
 
 
 class IngestResponse(BaseModel):
@@ -33,6 +36,20 @@ class IngestResponse(BaseModel):
 class RetrieveResponse(BaseModel):
     entries: list[LedgerRow]
     next_cursor: str | None = None
+
+
+class CreateStatementBody(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=512)
+    page_count: int | None = Field(default=None, ge=0, le=10_000)
+    payment_count: int = Field(default=0, ge=0, le=100_000)
+
+
+class StatementRow(BaseModel):
+    id: UUID4
+    filename: str
+    page_count: int | None
+    payment_count: int
+    created_at: str
 
 
 class SaltResponse(BaseModel):
@@ -119,6 +136,80 @@ async def init_crypto_salt(user_id: str = Depends(get_current_user_id)):
     return InitSaltResponse(password_salt=salt_b64, created=True)
 
 
+@app.get("/statements", response_model=list[StatementRow])
+async def list_statements(user_id: str = Depends(get_current_user_id)):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, filename, page_count, payment_count, created_at
+            FROM public.statements
+            WHERE user_id = $1::uuid
+            ORDER BY created_at DESC
+            """,
+            str(user_id),
+        )
+    return [
+        StatementRow(
+            id=r["id"],
+            filename=r["filename"],
+            page_count=r["page_count"],
+            payment_count=r["payment_count"],
+            created_at=r["created_at"].isoformat(),
+        )
+        for r in rows
+    ]
+
+
+@app.post("/statements", status_code=201, response_model=StatementRow)
+async def create_statement(
+    body: CreateStatementBody,
+    user_id: str = Depends(get_current_user_id),
+):
+    pool = await get_pool()
+    new_id = uuid.uuid4()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.statements (id, user_id, filename, page_count, payment_count)
+            VALUES ($1, $2::uuid, $3, $4, $5)
+            RETURNING id, filename, page_count, payment_count, created_at
+            """,
+            new_id,
+            str(user_id),
+            body.filename.strip()[:512],
+            body.page_count,
+            body.payment_count,
+        )
+    return StatementRow(
+        id=row["id"],
+        filename=row["filename"],
+        page_count=row["page_count"],
+        payment_count=row["payment_count"],
+        created_at=row["created_at"].isoformat(),
+    )
+
+
+@app.delete("/statements/{statement_id}", status_code=204)
+async def delete_statement(
+    statement_id: UUID4,
+    user_id: str = Depends(get_current_user_id),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            DELETE FROM public.statements
+            WHERE id = $1 AND user_id = $2::uuid
+            """,
+            statement_id,
+            str(user_id),
+        )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="Statement not found")
+    return None
+
+
 @app.post("/ingest", status_code=201, response_model=IngestResponse)
 async def ingest(
     body: IngestBody,
@@ -127,13 +218,25 @@ async def ingest(
     pool = await get_pool()
     new_id = uuid.uuid4()
     async with pool.acquire() as conn:
+        if body.statement_id is not None:
+            owned = await conn.fetchrow(
+                """
+                SELECT id FROM public.statements
+                WHERE id = $1 AND user_id = $2::uuid
+                """,
+                body.statement_id,
+                str(user_id),
+            )
+            if owned is None:
+                raise HTTPException(status_code=404, detail="Statement not found")
         await conn.execute(
             """
-            INSERT INTO public.ledger_entries (id, user_id, encrypted_blob, nonce)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO public.ledger_entries (id, user_id, statement_id, encrypted_blob, nonce)
+            VALUES ($1, $2::uuid, $3, $4, $5)
             """,
             new_id,
-            uuid.UUID(user_id),
+            str(user_id),
+            body.statement_id,
             body.encrypted_blob,
             body.nonce,
         )
@@ -145,35 +248,72 @@ async def retrieve(
     user_id: str = Depends(get_current_user_id),
     limit: int = 50,
     cursor: str | None = None,
+    statement_id: UUID4 | None = None,
 ) -> RetrieveResponse:
     safe_limit = max(1, min(limit, 200))
     pool = await get_pool()
     async with pool.acquire() as conn:
         if cursor:
-            rows = await conn.fetch(
-                """
-                SELECT id, encrypted_blob, nonce, created_at
-                FROM public.ledger_entries
-                WHERE user_id = $1 AND created_at < $2::timestamptz
-                ORDER BY created_at DESC
-                LIMIT $3
-                """,
-                uuid.UUID(user_id),
-                cursor,
-                safe_limit + 1,
-            )
+            try:
+                datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail="Invalid cursor") from e
+            if statement_id is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, encrypted_blob, nonce, created_at, statement_id
+                    FROM public.ledger_entries
+                    WHERE user_id = $1::uuid
+                      AND statement_id = $2
+                      AND created_at < ($3::text)::timestamptz
+                    ORDER BY created_at DESC
+                    LIMIT $4::int
+                    """,
+                    str(user_id),
+                    statement_id,
+                    cursor,
+                    safe_limit + 1,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, encrypted_blob, nonce, created_at, statement_id
+                    FROM public.ledger_entries
+                    WHERE user_id = $1::uuid
+                      AND created_at < ($2::text)::timestamptz
+                    ORDER BY created_at DESC
+                    LIMIT $3::int
+                    """,
+                    str(user_id),
+                    cursor,
+                    safe_limit + 1,
+                )
         else:
-            rows = await conn.fetch(
-                """
-                SELECT id, encrypted_blob, nonce, created_at
-                FROM public.ledger_entries
-                WHERE user_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-                """,
-                uuid.UUID(user_id),
-                safe_limit + 1,
-            )
+            if statement_id is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, encrypted_blob, nonce, created_at, statement_id
+                    FROM public.ledger_entries
+                    WHERE user_id = $1::uuid AND statement_id = $2
+                    ORDER BY created_at DESC
+                    LIMIT $3::int
+                    """,
+                    str(user_id),
+                    statement_id,
+                    safe_limit + 1,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, encrypted_blob, nonce, created_at, statement_id
+                    FROM public.ledger_entries
+                    WHERE user_id = $1::uuid
+                    ORDER BY created_at DESC
+                    LIMIT $2::int
+                    """,
+                    str(user_id),
+                    safe_limit + 1,
+                )
     has_more = len(rows) > safe_limit
     page_rows = rows[:safe_limit]
     entries = [
@@ -182,6 +322,7 @@ async def retrieve(
             encrypted_blob=r["encrypted_blob"],
             nonce=r["nonce"],
             created_at=r["created_at"].isoformat(),
+            statement_id=r["statement_id"],
         )
         for r in page_rows
     ]

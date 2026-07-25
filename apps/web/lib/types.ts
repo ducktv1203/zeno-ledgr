@@ -3,11 +3,20 @@ export type ApiLedgerRow = {
   encrypted_blob: string;
   nonce: string;
   created_at: string;
+  statement_id?: string | null;
 };
 
 export type RetrieveResponse = {
   entries: ApiLedgerRow[];
   next_cursor: string | null;
+};
+
+export type StatementRow = {
+  id: string;
+  filename: string;
+  page_count: number | null;
+  payment_count: number;
+  created_at: string;
 };
 
 export type DecryptedLedgerRow = {
@@ -18,5 +27,5 @@ export type DecryptedLedgerRow = {
   merchantMatched: boolean;
   amount: string;
   date: string;
+  statementId: string | null;
 };
-

@@ -1,4 +1,4 @@
-import type { RetrieveResponse } from "@/lib/types";
+import type { RetrieveResponse, StatementRow } from "@/lib/types";
 
 function apiBase(): string {
   const u = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -33,6 +33,9 @@ async function request<T>(
   if (!response.ok) {
     throw new ApiError(response.status, await response.text());
   }
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return (await response.json()) as T;
 }
 
@@ -46,7 +49,6 @@ export async function apiGetSalt(token: string): Promise<{ password_salt: string
   return request("/crypto/salt", token);
 }
 
-/** Get salt, or create it on first login when missing. */
 export async function apiEnsureSalt(
   token: string,
 ): Promise<{ password_salt: string }> {
@@ -62,9 +64,27 @@ export async function apiEnsureSalt(
   }
 }
 
+export async function apiCreateStatement(
+  token: string,
+  body: { filename: string; page_count?: number | null; payment_count: number },
+): Promise<StatementRow> {
+  return request("/statements", token, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function apiListStatements(token: string): Promise<StatementRow[]> {
+  return request("/statements", token);
+}
+
+export async function apiDeleteStatement(token: string, statementId: string): Promise<void> {
+  return request(`/statements/${statementId}`, token, { method: "DELETE" });
+}
+
 export async function apiIngest(
   token: string,
-  payload: { encrypted_blob: string; nonce: string },
+  payload: { encrypted_blob: string; nonce: string; statement_id?: string | null },
 ): Promise<{ id: string }> {
   return request("/ingest", token, {
     method: "POST",
@@ -74,11 +94,12 @@ export async function apiIngest(
 
 export async function apiRetrieve(
   token: string,
-  params?: { limit?: number; cursor?: string | null },
+  params?: { limit?: number; cursor?: string | null; statement_id?: string | null },
 ): Promise<RetrieveResponse> {
   const query = new URLSearchParams();
   if (params?.limit) query.set("limit", String(params.limit));
   if (params?.cursor) query.set("cursor", params.cursor);
+  if (params?.statement_id) query.set("statement_id", params.statement_id);
   const suffix = query.size ? `?${query.toString()}` : "";
   return request(`/retrieve${suffix}`, token);
 }

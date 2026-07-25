@@ -1,22 +1,28 @@
 [
-  {
-    "pattern": "STARBUCKS",
-    "displayName": "Starbucks"
-  },
-  {
-    "pattern": "AMZN MKTP",
-    "displayName": "Amazon"
-  },
-  {
-    "pattern": "/paypal/i",
-    "displayName": "PayPal"
-  },
-  {
-    "pattern": "UBER TRIP",
-    "displayName": "Uber"
-  },
-  {
-    "pattern": "WHOLEFDS",
-    "displayName": "Whole Foods"
-  }
+  { "pattern": "YOUTUBE", "displayName": "YouTube" },
+  { "pattern": "GOOGLE*YOUTUBE", "displayName": "YouTube" },
+  { "pattern": "GOOGLE *YOUTU", "displayName": "YouTube" },
+  { "pattern": "YT PREMIUM", "displayName": "YouTube" },
+  { "pattern": "NETFLIX", "displayName": "Netflix" },
+  { "pattern": "SPOTIFY", "displayName": "Spotify" },
+  { "pattern": "Adobe", "displayName": "Adobe" },
+  { "pattern": "Amazon Prime", "displayName": "Amazon Prime" },
+  { "pattern": "AMZN MKTP", "displayName": "Amazon" },
+  { "pattern": "AMZN", "displayName": "Amazon" },
+  { "pattern": "AMAZON", "displayName": "Amazon" },
+  { "pattern": "ORIGIN ENERGY", "displayName": "Origin Energy" },
+  { "pattern": "UBER EATS", "displayName": "Uber Eats" },
+  { "pattern": "UBER *TRIP", "displayName": "Uber" },
+  { "pattern": "UBER", "displayName": "Uber" },
+  { "pattern": "WOOLWORTHS", "displayName": "Woolworths" },
+  { "pattern": "COLES", "displayName": "Coles" },
+  { "pattern": "AFTERPAY", "displayName": "Afterpay" },
+  { "pattern": "TRANSLINK", "displayName": "Translink" },
+  { "pattern": "STARBUCKS", "displayName": "Starbucks" },
+  { "pattern": "/paypal/i", "displayName": "PayPal" },
+  { "pattern": "WHOLEFDS", "displayName": "Whole Foods" },
+  { "pattern": "DISNEY", "displayName": "Disney+" },
+  { "pattern": "APPLE.COM/BILL", "displayName": "Apple" },
+  { "pattern": "MICROSOFT", "displayName": "Microsoft" },
+  { "pattern": "GOOGLE*Google", "displayName": "Google" }
 ]

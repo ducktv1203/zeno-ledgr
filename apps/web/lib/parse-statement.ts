@@ -10,6 +10,8 @@ export type ParseStatementResult = {
   skipped: number;
   warnings: string[];
   usedOcr?: boolean;
+  pageCount?: number;
+  lineCount?: number;
 };
 
 export type { StatementReadProgress };
@@ -40,7 +42,13 @@ const DEBIT_HEADERS = ["debit", "withdrawal", "money out", "out"];
 const CREDIT_HEADERS = ["credit", "deposit", "money in", "in"];
 
 const SKIP_LINE =
-  /\b(opening balance|closing balance|balance brought forward|available balance|account number|bsb|page\s+\d+(?:\s+of\s+\d+)?|statement period|total debit|total credit|transaction details|please note|important information|continued on next page)\b/i;
+  /\b(opening balance|closing balance|balance brought forward|available balance|account number|bsb|page\s+\d+(?:\s+of\s+\d+)?|statement period|total debit|total credit|transaction details|please note|important information|continued on next page|date\s+description|debit\s+credit|transaction statement|cheques?\s+written|account\s+fee|customer relations|compliments.?and.?complaints|financial complaints|afca|passcodes?|important safety notice|keeping your passcodes|reply paid|gpo box|free call|dispute resolution|commbank\.com\.au|we try to get things right|unless you make a reasonable attempt)\b/i;
+
+const HEADERISH_MERCHANT =
+  /^(date|description|debit|credit|balance|amount|particulars|details|narrative|merchant|transactions?|statement|cheques?\s+written|account\s+fee)(\s+\w+){0,6}$/i;
+
+const BOILERPLATE =
+  /\b(afca|passcode|complaints?|customer relations|commbank|asic|dispute resolution|reply paid|gpo box|we try to get things right|keeping your passcodes|important safety notice|australian financial)\b/i;
 
 const MONTH_MAP: Record<string, number> = {
   jan: 1,
@@ -253,6 +261,28 @@ function extractAmountFromRest(rest: string): { amount: string | null; merchant:
   return { amount: null, merchant: rest.trim() };
 }
 
+export function isPlausiblePayment(merchantRaw: string, amount: string, date: string): boolean {
+  const merchant = merchantRaw.trim();
+  if (merchant.length < 2 || merchant.length > 80) return false;
+  if (HEADERISH_MERCHANT.test(merchant) || SKIP_LINE.test(merchant) || BOILERPLATE.test(merchant)) {
+    return false;
+  }
+  if (/\b(cheques?\s+written|account\s+fee|opening|closing)\b/i.test(merchant)) return false;
+  // Too many zeros / summary tables
+  if ((merchant.match(/\b0\.00\b/g) ?? []).length >= 2) return false;
+
+  const n = Number.parseFloat(amount);
+  if (!Number.isFinite(n) || n <= 0) return false;
+
+  const t = Date.parse(`${date}T00:00:00Z`);
+  if (Number.isNaN(t)) return false;
+  const year = new Date(t).getUTCFullYear();
+  const nowY = new Date().getUTCFullYear();
+  if (year < 2005 || year > nowY + 1) return false;
+
+  return true;
+}
+
 function rowKey(r: ParsedStatementRow): string {
   return `${r.date}|${r.amount}|${r.merchantRaw.toLowerCase()}`;
 }
@@ -281,7 +311,11 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
       .trim()
       .replace(/^[-\u2013\u2014:]+/, "")
       .trim();
-    if (merchantRaw && pending.amount && merchantRaw.length >= 2) {
+    if (
+      merchantRaw &&
+      pending.amount &&
+      isPlausiblePayment(merchantRaw, pending.amount, pending.date)
+    ) {
       const row: ParsedStatementRow = {
         line: pending.line,
         merchantRaw,
@@ -301,7 +335,9 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
 
   for (let i = 0; i < lines.length; i++) {
     const rawLine = cleanOcrLine(lines[i]!);
-    if (!rawLine || SKIP_LINE.test(rawLine)) continue;
+    if (!rawLine || SKIP_LINE.test(rawLine) || BOILERPLATE.test(rawLine)) continue;
+    // Hard stop on long legal/footer paragraphs
+    if (rawLine.length > 160) continue;
 
     let dateMatch = DATE_AT_START.exec(rawLine);
     let restAfterDate = "";
@@ -309,9 +345,15 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
     if (dateMatch) {
       restAfterDate = rawLine.slice(dateMatch[0].length).trim();
     } else {
-      // OCR sometimes puts the date mid-line: "VISA PURCHASE 01/07/2026 NETFLIX 22.99"
+      // Only accept mid-line dates on short transaction-like lines (not footers).
       const mid = DATE_ANYWHERE.exec(rawLine);
-      if (mid && mid.index !== undefined && mid.index <= 40) {
+      if (
+        mid &&
+        mid.index !== undefined &&
+        mid.index <= 24 &&
+        rawLine.length <= 120 &&
+        !BOILERPLATE.test(rawLine)
+      ) {
         dateMatch = mid;
         const before = rawLine.slice(0, mid.index).trim();
         const after = rawLine.slice(mid.index + mid[0].length).trim();
@@ -338,17 +380,20 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
     }
 
     if (pending) {
+      // Never glue footer/legal text onto a transaction description.
+      if (BOILERPLATE.test(rawLine) || SKIP_LINE.test(rawLine) || rawLine.length > 100) {
+        flush();
+        continue;
+      }
       const amountMatch = TRAILING_AMOUNT.exec(rawLine);
       if (amountMatch && !pending.amount) {
         const n = parseAmountCell(amountMatch[1]!);
         if (n !== null) pending.amount = formatAbsAmount(n);
         const before = rawLine.slice(0, amountMatch.index).trim();
-        if (before) pending.merchantParts.push(before);
-      } else if (!/^\d+(\.\d+)?$/.test(rawLine) && !SKIP_LINE.test(rawLine)) {
-        // Continuation description lines — stop if another date appears mid-append noise
-        if (!DATE_AT_START.test(rawLine)) {
-          pending.merchantParts.push(rawLine);
-        }
+        if (before && before.length <= 80) pending.merchantParts.push(before);
+      } else if (!/^\d+(\.\d+)?$/.test(rawLine) && !DATE_AT_START.test(rawLine)) {
+        const soFar = pending.merchantParts.join(" ").length;
+        if (soFar < 80) pending.merchantParts.push(rawLine.slice(0, 80));
       }
     }
   }
@@ -360,7 +405,7 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
       "No transactions found. Check the preview after re-upload, or try a clearer photo/PDF.",
     );
   } else if (skipped > 0) {
-    warnings.push(`Skipped ${skipped} incomplete or unparseable line(s).`);
+    warnings.push(`Skipped ${skipped} incomplete, footer, or non-payment line(s).`);
   }
 
   return { rows, skipped, warnings };
@@ -464,7 +509,7 @@ export async function parseStatementFile(
   if (isPdf) {
     const { readPdfStatement } = await import("@/lib/extract-pdf-text");
     const buffer = await file.arrayBuffer();
-    let { lines, usedOcr } = await readPdfStatement(buffer, onProgress);
+    let { lines, usedOcr, pageCount } = await readPdfStatement(buffer, onProgress);
     let parsed = parseStatementLines(lines);
 
     // Text layer existed but didn't yield rows — retry every page with OCR.
@@ -476,22 +521,33 @@ export async function parseStatementFile(
       const retry = await readPdfStatement(buffer, onProgress, { forceOcr: true });
       lines = retry.lines;
       usedOcr = retry.usedOcr;
+      pageCount = retry.pageCount;
       parsed = parseStatementLines(lines);
     }
+
+    parsed.pageCount = pageCount;
+    parsed.lineCount = lines.length;
 
     if (lines.length === 0) {
       return {
         rows: [],
         skipped: 0,
         usedOcr,
+        pageCount,
+        lineCount: 0,
         warnings: ["Could not read any text from this PDF, even with OCR."],
       };
     }
 
+    parsed.warnings = [
+      `Read ${pageCount} page${pageCount === 1 ? "" : "s"}, ${lines.length} text lines → ${parsed.rows.length} payment${parsed.rows.length === 1 ? "" : "s"}.`,
+      ...parsed.warnings,
+    ];
+
     if (usedOcr) {
       parsed.usedOcr = true;
       parsed.warnings = [
-        "Used on-device OCR for scanned pages — review the preview before importing.",
+        "Used on-device OCR — review the preview before importing.",
         ...parsed.warnings,
       ];
     }
