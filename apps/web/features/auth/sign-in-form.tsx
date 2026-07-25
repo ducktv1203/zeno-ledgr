@@ -20,7 +20,7 @@ export function SignInForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!supabase) {
-      setError("Missing Supabase public env values.");
+      setError("Auth is not configured.");
       return;
     }
     setLoading(true);

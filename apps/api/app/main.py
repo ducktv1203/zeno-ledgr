@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, UUID4
 from app.auth import get_current_user_id
 from app.config import settings
 from app.db import close_pool, get_pool, ping_database
+from app.local_auth import router as local_auth_router
 
 # --- Schemas (opaque blobs only; no amount/merchant fields) ---
 
@@ -59,6 +60,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(local_auth_router)
 
 
 @app.get("/livez")

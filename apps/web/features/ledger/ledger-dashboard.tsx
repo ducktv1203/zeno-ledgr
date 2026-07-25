@@ -75,7 +75,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   useEffect(() => {
     if (!encryptionActive) return;
     void ledger.loadFirstPage();
-  }, [encryptionActive, ledger]);
+  }, [encryptionActive, ledger.loadFirstPage]);
 
   async function unlock(e: React.FormEvent) {
     e.preventDefault();

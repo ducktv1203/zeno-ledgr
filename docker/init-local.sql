@@ -1,6 +1,13 @@
 -- Local Postgres (Docker) — no auth.users; API enforces user_id from JWT
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+CREATE TABLE IF NOT EXISTS public.app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS public.user_crypto_meta (
   user_id UUID PRIMARY KEY,
   password_salt TEXT NOT NULL

@@ -3,35 +3,30 @@
 import { useEffect, useState } from "react";
 import { LedgerDashboard } from "@/features/ledger/ledger-dashboard";
 import { useAuthClient } from "@/features/auth/use-auth";
-import { apiGetSalt, apiInitSalt } from "@/lib/api";
+import { apiEnsureSalt } from "@/lib/api";
 
 export default function DashboardPage() {
-  const supabase = useAuthClient();
+  const auth = useAuthClient();
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [saltB64, setSaltB64] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!supabase) return;
-    supabase.auth.getSession().then(({ data }) => {
+    if (!auth) return;
+    auth.auth.getSession().then(({ data }) => {
       setAccessToken(data.session?.access_token ?? null);
     });
-  }, [supabase]);
+  }, [auth]);
 
   useEffect(() => {
     if (!accessToken) return;
     (async () => {
       try {
-        const data = await apiGetSalt(accessToken);
+        const data = await apiEnsureSalt(accessToken);
         setSaltB64(data.password_salt);
+        setError(null);
       } catch (e) {
-        const message = e instanceof Error ? e.message : "Salt bootstrap failed";
-        if (message.includes("404")) {
-          const init = await apiInitSalt(accessToken);
-          setSaltB64(init.password_salt);
-          return;
-        }
-        setError(message);
+        setError(e instanceof Error ? e.message : "Salt bootstrap failed");
       }
     })();
   }, [accessToken]);
@@ -51,4 +46,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-

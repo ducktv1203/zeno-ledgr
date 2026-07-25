@@ -22,7 +22,7 @@ export function SignUpForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!supabase) {
-      setError("Missing Supabase public env values.");
+      setError("Auth is not configured.");
       return;
     }
     if (password.length < 8) {
@@ -42,7 +42,11 @@ export function SignUpForm() {
       setError(authError.message);
       return;
     }
-    router.push("/verify");
+    const local =
+      (process.env.NEXT_PUBLIC_AUTH_MODE ?? "local").toLowerCase() === "local" ||
+      (process.env.NEXT_PUBLIC_AUTH_MODE ?? "local").toLowerCase() === "docker";
+    router.push(local ? "/dashboard" : "/verify");
+    if (local) router.refresh();
   }
 
   return (

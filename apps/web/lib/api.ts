@@ -5,6 +5,18 @@ function apiBase(): string {
   return u.replace(/\/$/, "");
 }
 
+export class ApiError extends Error {
+  status: number;
+  body: string;
+
+  constructor(status: number, body: string) {
+    super(body || `Request failed (${status})`);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function request<T>(
   path: string,
   token: string,
@@ -19,7 +31,7 @@ async function request<T>(
     },
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new ApiError(response.status, await response.text());
   }
   return (await response.json()) as T;
 }
@@ -32,6 +44,22 @@ export async function apiInitSalt(
 
 export async function apiGetSalt(token: string): Promise<{ password_salt: string }> {
   return request("/crypto/salt", token);
+}
+
+/** Get salt, or create it on first login when missing. */
+export async function apiEnsureSalt(
+  token: string,
+): Promise<{ password_salt: string }> {
+  try {
+    return await apiGetSalt(token);
+  } catch (e) {
+    const missing =
+      (e instanceof ApiError && e.status === 404) ||
+      (e instanceof Error && e.message.toLowerCase().includes("crypto metadata not found"));
+    if (!missing) throw e;
+    const init = await apiInitSalt(token);
+    return { password_salt: init.password_salt };
+  }
 }
 
 export async function apiIngest(
@@ -54,4 +82,3 @@ export async function apiRetrieve(
   const suffix = query.size ? `?${query.toString()}` : "";
   return request(`/retrieve${suffix}`, token);
 }
-
