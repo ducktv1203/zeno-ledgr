@@ -72,11 +72,14 @@ export function SignInForm() {
         </div>
       </div>
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
-      <Button type="submit" disabled={loading}>
+      <Button type="submit" disabled={loading} className="w-full">
         {loading ? "Signing in..." : "Sign in"}
       </Button>
       <p className="text-muted-foreground text-sm">
-        Need an account? <Link className="underline" href="/signup">Sign up</Link>
+        Need an account?{" "}
+        <Link className="font-medium text-foreground underline underline-offset-4" href="/signup">
+          Sign up
+        </Link>
       </p>
     </form>
   );

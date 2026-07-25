@@ -14,10 +14,10 @@ type Props = {
 
 export function AuthLayoutCard({ title, description, children }: Props) {
   return (
-    <Card className="mx-auto w-full max-w-md border-zinc-800 bg-zinc-950/50">
+    <Card className="app-surface mx-auto w-full max-w-md rounded-2xl">
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+        <CardTitle className="text-2xl">{title}</CardTitle>
+        <CardDescription className="text-sm leading-relaxed">{description}</CardDescription>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>

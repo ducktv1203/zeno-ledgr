@@ -42,7 +42,11 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-4">
-      {error ? <p className="text-destructive text-sm">{error}</p> : null}
+      {error ? (
+        <div className="section-shell border-destructive/40">
+          <p className="text-destructive text-sm">{error}</p>
+        </div>
+      ) : null}
       <LedgerDashboard accessToken={accessToken} saltB64={saltB64} />
     </div>
   );

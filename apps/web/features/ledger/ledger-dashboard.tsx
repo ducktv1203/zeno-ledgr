@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Eye, EyeOff, ShieldCheck, Wallet, Receipt, CalendarDays } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -40,6 +41,7 @@ type Props = {
 export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   const [encryptionActive, setEncryptionActive] = useState(false);
   const [masterPassword, setMasterPassword] = useState("");
+  const [showMasterPassword, setShowMasterPassword] = useState(false);
   const [cryptoError, setCryptoError] = useState<string | null>(null);
   const [newMerchant, setNewMerchant] = useState("");
   const [newAmount, setNewAmount] = useState("");
@@ -96,11 +98,46 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
     [ledger.rows],
   );
 
+  const totalVolume = useMemo(
+    () =>
+      ledger.rows.reduce(
+        (sum, row) => sum + (Number.isFinite(Number(row.amount)) ? Number(row.amount) : 0),
+        0,
+      ),
+    [ledger.rows],
+  );
+
   return (
     <div className="space-y-6">
-      <Card className="border-zinc-800 bg-zinc-950/50">
+      <section className="grid gap-3 md:grid-cols-3">
+        <div className="metric-tile">
+          <p className="text-muted-foreground text-xs uppercase tracking-[0.12em]">
+            Entries
+          </p>
+          <p className="mt-2 text-2xl font-semibold">{ledger.rows.length}</p>
+        </div>
+        <div className="metric-tile">
+          <p className="text-muted-foreground text-xs uppercase tracking-[0.12em]">
+            Local volume
+          </p>
+          <p className="mt-2 text-2xl font-semibold">{totalVolume.toFixed(2)}</p>
+        </div>
+        <div className="metric-tile">
+          <p className="text-muted-foreground text-xs uppercase tracking-[0.12em]">
+            Session state
+          </p>
+          <p className="mt-2 text-sm font-medium">
+            {encryptionActive ? "Unlocked" : "Locked"}
+          </p>
+        </div>
+      </section>
+
+      <Card className="app-surface rounded-2xl">
         <CardHeader>
-          <CardTitle>Security and unlock</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4" />
+            Security and unlock
+          </CardTitle>
           <CardDescription>
             Key is held in memory for this tab session. Backend only stores ciphertext.
           </CardDescription>
@@ -110,15 +147,25 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
             <form className="flex flex-wrap items-end gap-3" onSubmit={unlock}>
               <div className="space-y-2">
                 <Label htmlFor="master-password">Master password</Label>
-                <Input
-                  id="master-password"
-                  type="password"
-                  value={masterPassword}
-                  onChange={(e) => setMasterPassword(e.target.value)}
-                  className="min-w-[220px]"
-                  autoComplete="off"
-                  required
-                />
+                <div className="flex gap-2">
+                  <Input
+                    id="master-password"
+                    type={showMasterPassword ? "text" : "password"}
+                    value={masterPassword}
+                    onChange={(e) => setMasterPassword(e.target.value)}
+                    className="min-w-[220px]"
+                    autoComplete="off"
+                    required
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowMasterPassword((v) => !v)}
+                    aria-label={showMasterPassword ? "Hide master password" : "Show master password"}
+                  >
+                    {showMasterPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
               </div>
               <Button type="submit" disabled={!saltB64}>
                 Unlock
@@ -138,10 +185,13 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="border-zinc-800 bg-zinc-950/50">
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
+        <Card className="app-surface rounded-2xl">
           <CardHeader>
-            <CardTitle>Add encrypted entry</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Receipt className="h-4 w-4" />
+              Add encrypted entry
+            </CardTitle>
             <CardDescription>Payload encrypts client-side before POST /ingest.</CardDescription>
           </CardHeader>
           <CardContent>
@@ -183,9 +233,12 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
           </CardContent>
         </Card>
 
-        <Card className="border-zinc-800 bg-zinc-950/50">
+        <Card className="app-surface rounded-2xl">
           <CardHeader>
-            <CardTitle>Spending insights</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Wallet className="h-4 w-4" />
+              Spending insights
+            </CardTitle>
             <CardDescription>Chart from decrypted local session data.</CardDescription>
           </CardHeader>
           <CardContent className="h-64">
@@ -208,9 +261,12 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         </Card>
       </div>
 
-      <Card className="border-zinc-800 bg-zinc-950/50">
+      <Card className="app-surface rounded-2xl">
         <CardHeader>
-          <CardTitle>Ledger entries</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarDays className="h-4 w-4" />
+            Ledger entries
+          </CardTitle>
           <CardDescription>Refined merchant labels are computed locally.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { LayoutDashboard, Settings, LogOut, Lock } from "lucide-react";
 import { SecurityStatusBadge } from "@/components/security-status-badge";
 import { Button } from "@/components/ui/button";
 import { clearSessionCrypto, isCryptoUnlocked } from "@/lib/crypto";
@@ -47,28 +48,58 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <main className="mx-auto max-w-6xl space-y-6 p-6 md:p-10">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
-          <p className="text-muted-foreground text-xs uppercase tracking-wider">
-            ZenoLedgr
-          </p>
-          <h1 className="text-2xl font-semibold tracking-tight">Encrypted Finance Dashboard</h1>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <SecurityStatusBadge encryptionActive={cryptoActive} />
-          <Button variant="outline" asChild>
-            <Link href="/dashboard">Dashboard</Link>
-          </Button>
-          <Button variant="outline" asChild>
-            <Link href="/settings">Settings</Link>
-          </Button>
-          <Button variant="outline" onClick={() => void signOut()}>
-            Sign out
-          </Button>
-        </div>
-      </header>
-      {children}
+    <main className="mx-auto min-h-screen max-w-[1400px] p-4 md:p-6">
+      <div className="grid gap-4 lg:grid-cols-[250px_1fr]">
+        <aside className="app-surface rounded-2xl p-4">
+          <div className="border-b border-border pb-4">
+            <p className="text-muted-foreground text-[11px] uppercase tracking-[0.18em]">
+              ZenoLedgr
+            </p>
+            <p className="mt-2 text-lg font-semibold">Operations Console</p>
+          </div>
+          <nav className="mt-4 space-y-2">
+            <Button variant="secondary" className="w-full justify-start gap-2" asChild>
+              <Link href="/dashboard">
+                <LayoutDashboard className="h-4 w-4" />
+                Dashboard
+              </Link>
+            </Button>
+            <Button variant="ghost" className="w-full justify-start gap-2" asChild>
+              <Link href="/settings">
+                <Settings className="h-4 w-4" />
+                Settings
+              </Link>
+            </Button>
+          </nav>
+          <div className="mt-6 border-t border-border pt-4">
+            <div className="mb-3">
+              <SecurityStatusBadge encryptionActive={cryptoActive} />
+            </div>
+            <Button variant="outline" className="w-full justify-start gap-2" onClick={() => void signOut()}>
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </Button>
+          </div>
+        </aside>
+
+        <section className="space-y-4">
+          <header className="app-surface rounded-2xl px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-1">
+                <h1 className="text-2xl font-semibold tracking-tight">Encrypted Finance Dashboard</h1>
+                <p className="text-muted-foreground text-sm">
+                  Blind orchestration mode active. Sensitive ledger data remains local.
+                </p>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs">
+                <Lock className="h-3.5 w-3.5" />
+                Zero-knowledge path
+              </div>
+            </div>
+          </header>
+          {children}
+        </section>
+      </div>
     </main>
   );
 }
