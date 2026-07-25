@@ -1,29 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Calendar, CalendarDayButton } from "@/components/ui/calendar";
 import {
   expectedDatesInRange,
   todayIso,
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
-
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-const ACCENTS = [
-  "bg-sky-500/25 text-sky-100 ring-sky-500/40",
-  "bg-emerald-500/25 text-emerald-100 ring-emerald-500/40",
-  "bg-amber-500/25 text-amber-100 ring-amber-500/40",
-  "bg-rose-500/25 text-rose-100 ring-rose-500/40",
-  "bg-teal-500/25 text-teal-100 ring-teal-500/40",
-  "bg-indigo-500/25 text-indigo-100 ring-indigo-500/40",
-];
+import { cn } from "@/lib/utils";
 
 type DayEvent = {
   service: string;
   amount: string;
-  accent: string;
 };
 
 type Props = {
@@ -31,200 +19,169 @@ type Props = {
   onSelectService?: (service: string) => void;
 };
 
-function monthBounds(year: number, monthIndex: number): { start: string; end: string } {
-  const start = new Date(Date.UTC(year, monthIndex, 1));
-  const end = new Date(Date.UTC(year, monthIndex + 1, 0));
+function toDate(iso: string): Date {
+  // Noon UTC avoids DST / timezone day-shift when DayPicker reads local date parts.
+  return new Date(`${iso}T12:00:00Z`);
+}
+
+function toIso(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function monthRange(month: Date): { start: string; end: string } {
+  const y = month.getUTCFullYear();
+  const m = month.getUTCMonth();
+  const start = new Date(Date.UTC(y, m, 1));
+  const end = new Date(Date.UTC(y, m + 1, 0));
+  // Pad a week either side so outside days still get markers
+  start.setUTCDate(start.getUTCDate() - 7);
+  end.setUTCDate(end.getUTCDate() + 7);
   return {
     start: start.toISOString().slice(0, 10),
     end: end.toISOString().slice(0, 10),
   };
 }
 
-function buildGrid(year: number, monthIndex: number): (string | null)[] {
-  const first = new Date(Date.UTC(year, monthIndex, 1));
-  // JS: 0=Sun … convert to Mon=0
-  const mondayOffset = (first.getUTCDay() + 6) % 7;
-  const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
-  const cells: (string | null)[] = [];
-  for (let i = 0; i < mondayOffset; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) {
-    cells.push(new Date(Date.UTC(year, monthIndex, d)).toISOString().slice(0, 10));
-  }
-  while (cells.length % 7 !== 0) cells.push(null);
-  return cells;
-}
-
 export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) {
   const today = todayIso();
-  const initial = new Date(`${today}T00:00:00Z`);
-  const [cursor, setCursor] = useState({
-    year: initial.getUTCFullYear(),
-    month: initial.getUTCMonth(),
-  });
-
-  const accentByService = useMemo(() => {
-    const map = new Map<string, string>();
-    subscriptions.forEach((s, i) => {
-      map.set(s.service, ACCENTS[i % ACCENTS.length]!);
-    });
-    return map;
-  }, [subscriptions]);
+  const [month, setMonth] = useState(() => toDate(today));
+  const [selected, setSelected] = useState<Date | undefined>(toDate(today));
 
   const eventsByDay = useMemo(() => {
-    const { start, end } = monthBounds(cursor.year, cursor.month);
+    const { start, end } = monthRange(month);
     const map = new Map<string, DayEvent[]>();
     for (const sub of subscriptions) {
-      const dates = expectedDatesInRange(sub, start, end);
-      const accent = accentByService.get(sub.service) ?? ACCENTS[0]!;
-      for (const date of dates) {
+      for (const date of expectedDatesInRange(sub, start, end)) {
         const list = map.get(date) ?? [];
-        list.push({ service: sub.service, amount: sub.amount, accent });
+        list.push({ service: sub.service, amount: sub.amount });
         map.set(date, list);
       }
     }
     return map;
-  }, [subscriptions, cursor, accentByService]);
+  }, [subscriptions, month]);
 
-  const cells = useMemo(() => buildGrid(cursor.year, cursor.month), [cursor]);
+  const dueDates = useMemo(
+    () => [...eventsByDay.keys()].map((iso) => toDate(iso)),
+    [eventsByDay],
+  );
 
-  const title = new Date(Date.UTC(cursor.year, cursor.month, 1)).toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  const selectedIso = selected ? toIso(selected) : null;
+  const selectedEvents = selectedIso ? (eventsByDay.get(selectedIso) ?? []) : [];
 
   const monthDueTotal = useMemo(() => {
+    const y = month.getUTCFullYear();
+    const m = month.getUTCMonth();
+    const start = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+    const end = new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
     let sum = 0;
-    for (const events of eventsByDay.values()) {
+    for (const [iso, events] of eventsByDay) {
+      if (iso < start || iso > end) continue;
       for (const e of events) sum += Number.parseFloat(e.amount) || 0;
     }
     return sum;
-  }, [eventsByDay]);
-
-  function shiftMonth(delta: number) {
-    setCursor((c) => {
-      const d = new Date(Date.UTC(c.year, c.month + delta, 1));
-      return { year: d.getUTCFullYear(), month: d.getUTCMonth() };
-    });
-  }
+  }, [eventsByDay, month]);
 
   if (subscriptions.length === 0) return null;
 
   return (
-    <div className="border-border space-y-4 rounded-xl border bg-gradient-to-b from-white/[0.03] to-transparent p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium tracking-tight">{title}</p>
-          <p className="text-muted-foreground text-xs">
-            Recurring dues this month · ~${monthDueTotal.toFixed(2)}
-          </p>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            aria-label="Previous month"
-            onClick={() => shiftMonth(-1)}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() =>
-              setCursor({
-                year: initial.getUTCFullYear(),
-                month: initial.getUTCMonth(),
-              })
-            }
-          >
-            Today
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            aria-label="Next month"
-            onClick={() => shiftMonth(1)}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <p className="text-muted-foreground text-xs">
+          Expected dues this month · ~${monthDueTotal.toFixed(2)}
+        </p>
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
-        {WEEKDAYS.map((d) => (
-          <div
-            key={d}
-            className="text-muted-foreground pb-1 text-center text-[10px] font-medium uppercase tracking-[0.14em]"
-          >
-            {d}
-          </div>
-        ))}
-        {cells.map((iso, idx) => {
-          if (!iso) {
-            return <div key={`empty-${idx}`} className="min-h-[4.5rem] rounded-lg" />;
-          }
-          const dayNum = Number(iso.slice(8, 10));
-          const events = eventsByDay.get(iso) ?? [];
-          const isToday = iso === today;
-          return (
-            <div
-              key={iso}
-              className={`min-h-[4.5rem] rounded-lg border p-1.5 transition-colors ${
-                isToday
-                  ? "border-sky-500/50 bg-sky-500/10"
-                  : events.length
-                    ? "border-border/80 bg-muted/20"
-                    : "border-transparent bg-muted/10"
-              }`}
-            >
-              <div
-                className={`mb-1 text-[11px] tabular-nums ${
-                  isToday ? "font-semibold text-sky-100" : "text-muted-foreground"
-                }`}
+      <Calendar
+        mode="single"
+        month={month}
+        onMonthChange={setMonth}
+        selected={selected}
+        onSelect={setSelected}
+        showOutsideDays
+        className="w-full rounded-xl border border-border bg-card p-3 [--cell-size:2.75rem] sm:[--cell-size:3rem]"
+        classNames={{
+          root: "w-full",
+          months: "w-full",
+          month: "w-full",
+          month_grid: "w-full border-collapse",
+          weekdays: "flex w-full",
+          weekday: "text-muted-foreground flex-1 select-none text-[0.8rem] font-normal",
+          week: "mt-2 flex w-full",
+          day: "group/day relative aspect-square h-full w-full flex-1 p-0 text-center",
+        }}
+        modifiers={{
+          due: dueDates,
+        }}
+        modifiersClassNames={{
+          due: "font-medium",
+        }}
+        components={{
+          DayButton: ({ day, modifiers, className, ...props }) => {
+            const iso = toIso(day.date);
+            const events = eventsByDay.get(iso) ?? [];
+            return (
+              <CalendarDayButton
+                day={day}
+                modifiers={modifiers}
+                className={cn(
+                  className,
+                  events.length > 0 &&
+                    !modifiers.selected &&
+                    "bg-sky-500/15 text-sky-50 hover:bg-sky-500/25",
+                )}
+                {...props}
               >
-                {dayNum}
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {events.slice(0, 3).map((e) => (
+                <span>{day.date.getUTCDate()}</span>
+                {events.length > 0 ? (
+                  <span className="flex items-center justify-center gap-0.5">
+                    {events.slice(0, 3).map((e) => (
+                      <span
+                        key={`${iso}-${e.service}`}
+                        className="bg-sky-400 size-1 rounded-full"
+                        title={`${e.service} · $${e.amount}`}
+                      />
+                    ))}
+                  </span>
+                ) : (
+                  <span className="size-1 opacity-0" aria-hidden />
+                )}
+              </CalendarDayButton>
+            );
+          },
+        }}
+      />
+
+      {selectedIso ? (
+        <div className="border-border rounded-xl border bg-muted/20 px-3 py-2.5">
+          <p className="mb-2 text-sm font-medium">
+            {selected!.toLocaleDateString(undefined, {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+              timeZone: "UTC",
+            })}
+          </p>
+          {selectedEvents.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No expected dues on this day.</p>
+          ) : (
+            <ul className="space-y-1">
+              {selectedEvents.map((e) => (
+                <li key={`${selectedIso}-${e.service}`}>
                   <button
-                    key={`${iso}-${e.service}`}
                     type="button"
-                    title={`${e.service} · $${e.amount}`}
-                    className={`truncate rounded px-1 py-0.5 text-left text-[10px] leading-tight ring-1 ring-inset ${e.accent}`}
+                    className="hover:bg-muted/50 flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-sm"
                     onClick={() => onSelectService?.(e.service)}
                   >
-                    {e.service}
+                    <span>{e.service}</span>
+                    <span className="font-mono text-xs">${e.amount}</span>
                   </button>
-                ))}
-                {events.length > 3 ? (
-                  <span className="text-muted-foreground px-1 text-[10px]">
-                    +{events.length - 3}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {subscriptions.map((s) => (
-          <button
-            key={s.service}
-            type="button"
-            className={`rounded-full px-2.5 py-1 text-[11px] ring-1 ring-inset ${
-              accentByService.get(s.service) ?? ACCENTS[0]
-            }`}
-            onClick={() => onSelectService?.(s.service)}
-          >
-            {s.service} · ${s.amount}
-          </button>
-        ))}
-      </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
