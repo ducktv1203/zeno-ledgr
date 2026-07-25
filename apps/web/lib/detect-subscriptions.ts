@@ -16,7 +16,14 @@ export type DetectedSubscription = {
   chargeCount: number;
   firstPurchaseDate: string;
   lastChargeDate: string;
+  /** Next due date on or after today (recurrence rolled forward from statement history). */
   nextExpectedDate: string | null;
+  /** Start of the billing period that contains today (previous due → next due). */
+  currentPeriodStart: string | null;
+  /** End of the current billing period (day before next due, inclusive). */
+  currentPeriodEnd: string | null;
+  /** Cadence step in days used for recurrence. */
+  stepDays: number | null;
   rawMerchants: string[];
 };
 
@@ -62,6 +69,73 @@ function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+export function todayIso(now = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Walk the recurrence forward from the last known charge until the next due
+ * is on or after `asOf` (defaults to today). Statement history can be months
+ * old — this keeps "next expected" in the current cycle.
+ */
+export function rollForwardExpected(
+  lastChargeDate: string,
+  stepDays: number,
+  asOf: string = todayIso(),
+): { nextDue: string; periodStart: string; periodEnd: string } {
+  let due = addDays(lastChargeDate, stepDays);
+  let guard = 0;
+  while (dayMs(due) < dayMs(asOf) && guard < 600) {
+    due = addDays(due, stepDays);
+    guard += 1;
+  }
+  const periodStart = addDays(due, -stepDays);
+  const periodEnd = addDays(due, -1);
+  return { nextDue: due, periodStart, periodEnd };
+}
+
+/** Expected due dates that fall inside [rangeStart, rangeEnd] inclusive. */
+export function expectedDatesInRange(
+  sub: DetectedSubscription,
+  rangeStart: string,
+  rangeEnd: string,
+): string[] {
+  if (!sub.stepDays || !sub.lastChargeDate) return [];
+  const step = sub.stepDays;
+  let cursor = sub.lastChargeDate;
+  let guard = 0;
+  while (dayMs(cursor) > dayMs(rangeStart) && guard < 600) {
+    cursor = addDays(cursor, -step);
+    guard += 1;
+  }
+  while (dayMs(cursor) < dayMs(rangeStart) && guard < 800) {
+    cursor = addDays(cursor, step);
+    guard += 1;
+  }
+  const out: string[] = [];
+  guard = 0;
+  while (dayMs(cursor) <= dayMs(rangeEnd) && guard < 200) {
+    out.push(cursor);
+    cursor = addDays(cursor, step);
+    guard += 1;
+  }
+  return out;
+}
+
+export function formatPeriod(start: string | null, end: string | null): string | null {
+  if (!start || !end) return null;
+  const fmt = (iso: string) => {
+    const d = new Date(`${iso}T00:00:00Z`);
+    return d.toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  };
+  return `${fmt(start)} – ${fmt(end)}`;
 }
 
 function median(nums: number[]): number {
@@ -201,21 +275,34 @@ export function detectSubscriptions(rows: DecryptedLedgerRow[]): DetectedSubscri
     // Drop low-confidence generic (non-brand) noise entirely.
     if (!bucket.knownBrand && confidence === "low") continue;
 
+    const resolvedCadence = cadence === "unknown" && bucket.knownBrand ? "monthly" : cadence;
     const step =
-      gapDaysForCadence(cadence) ?? (medGap > 0 ? Math.round(medGap) : bucket.knownBrand ? 30 : null);
+      gapDaysForCadence(resolvedCadence) ??
+      (medGap > 0 ? Math.round(medGap) : bucket.knownBrand ? 30 : null);
     const last = uniqueDates[uniqueDates.length - 1]!;
-    const nextExpectedDate =
-      chargeCount >= 2 && step ? addDays(last, step) : step && bucket.knownBrand ? addDays(last, step) : null;
+
+    let nextExpectedDate: string | null = null;
+    let currentPeriodStart: string | null = null;
+    let currentPeriodEnd: string | null = null;
+    if (step && (chargeCount >= 2 || bucket.knownBrand)) {
+      const rolled = rollForwardExpected(last, step);
+      nextExpectedDate = rolled.nextDue;
+      currentPeriodStart = rolled.periodStart;
+      currentPeriodEnd = rolled.periodEnd;
+    }
 
     out.push({
       service: bucket.service,
       amount: typicalAmount.toFixed(2),
-      cadence: cadence === "unknown" && bucket.knownBrand ? "monthly" : cadence,
+      cadence: resolvedCadence,
       confidence,
       chargeCount,
       firstPurchaseDate: uniqueDates[0]!,
       lastChargeDate: last,
       nextExpectedDate,
+      currentPeriodStart,
+      currentPeriodEnd,
+      stepDays: step,
       rawMerchants: [...bucket.raw],
     });
   }

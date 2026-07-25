@@ -10,6 +10,9 @@ import {
   CalendarDays,
   Upload,
   Repeat,
+  FileText,
+  Trash2,
+  X,
 } from "lucide-react";
 import {
   Bar,
@@ -44,12 +47,25 @@ import {
   parseStatementFile,
   type ParsedStatementRow,
 } from "@/lib/parse-statement";
-import { detectSubscriptions } from "@/lib/detect-subscriptions";
+import {
+  detectSubscriptions,
+  formatPeriod,
+  rowsForSubscription,
+  type DetectedSubscription,
+} from "@/lib/detect-subscriptions";
 import { useLedger } from "@/features/ledger/use-ledger";
+import { SubscriptionCalendar } from "@/features/ledger/subscription-calendar";
+
+const PAYMENTS_PER_PAGE = 25;
 
 type Props = {
   accessToken: string;
   saltB64: string | null;
+};
+
+type PendingMeta = {
+  filename: string;
+  pageCount?: number;
 };
 
 export function LedgerDashboard({ accessToken, saltB64 }: Props) {
@@ -62,6 +78,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   const [newDate, setNewDate] = useState(new Date().toISOString().slice(0, 10));
   const [saving, setSaving] = useState(false);
   const [pendingRows, setPendingRows] = useState<ParsedStatementRow[]>([]);
+  const [pendingMeta, setPendingMeta] = useState<PendingMeta | null>(null);
   const [parseWarnings, setParseWarnings] = useState<string[]>([]);
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
@@ -70,7 +87,13 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
+  const [statementError, setStatementError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [activeStatementId, setActiveStatementId] = useState<string | null>(null);
+  const [selectedSub, setSelectedSub] = useState<DetectedSubscription | null>(null);
+  const [paymentPage, setPaymentPage] = useState(1);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const paymentsRef = useRef<HTMLDivElement>(null);
 
   const ledger = useLedger(accessToken, encryptionActive);
 
@@ -95,6 +118,9 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   function lock() {
     clearSessionCrypto();
     setEncryptionActive(false);
+    setActiveStatementId(null);
+    setSelectedSub(null);
+    setPaymentPage(1);
   }
 
   async function onAddEntry(e: React.FormEvent) {
@@ -115,6 +141,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
     setImportError(null);
     setParseWarnings([]);
     setPendingRows([]);
+    setPendingMeta(null);
     setParseStatus(null);
     if (!file) return;
     setParsingFile(true);
@@ -124,6 +151,10 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       });
       setParseWarnings(parsed.warnings);
       setPendingRows(parsed.rows);
+      setPendingMeta({
+        filename: file.name,
+        pageCount: parsed.pageCount,
+      });
       if (parsed.rows.length === 0 && parsed.warnings.length === 0) {
         setImportError("No transactions found in that file.");
       }
@@ -136,17 +167,29 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   }
 
   async function onImportStatement() {
-    if (!encryptionActive || pendingRows.length === 0) return;
+    if (!encryptionActive || pendingRows.length === 0 || !pendingMeta) return;
     setImporting(true);
     setImportError(null);
     setImportProgress({ done: 0, total: pendingRows.length });
     try {
-      await ledger.addEntries(pendingRows, (done, total) => {
-        setImportProgress({ done, total });
-      });
+      const result = await ledger.addEntries(
+        pendingRows,
+        {
+          filename: pendingMeta.filename,
+          pageCount: pendingMeta.pageCount ?? null,
+        },
+        (done, total) => {
+          setImportProgress({ done, total });
+        },
+      );
       setPendingRows([]);
+      setPendingMeta(null);
       setParseWarnings([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      if (result.statementId) {
+        setActiveStatementId(result.statementId);
+        setPaymentPage(1);
+      }
     } catch (e) {
       setImportError(e instanceof Error ? e.message : "Import failed partway — refresh and retry");
     } finally {
@@ -155,36 +198,80 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
     }
   }
 
+  async function onDeleteStatement(id: string) {
+    setStatementError(null);
+    setDeletingId(id);
+    try {
+      await ledger.removeStatement(id);
+      if (activeStatementId === id) setActiveStatementId(null);
+      setPaymentPage(1);
+    } catch (e) {
+      setStatementError(e instanceof Error ? e.message : "Failed to delete statement");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  function openStatement(id: string) {
+    setActiveStatementId(id);
+    setSelectedSub(null);
+    setPaymentPage(1);
+    paymentsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const filteredRows = useMemo(() => {
+    if (!activeStatementId) return ledger.rows;
+    return ledger.rows.filter((r) => r.statementId === activeStatementId);
+  }, [ledger.rows, activeStatementId]);
+
+  const paymentPageCount = Math.max(1, Math.ceil(filteredRows.length / PAYMENTS_PER_PAGE));
+
+  useEffect(() => {
+    if (paymentPage > paymentPageCount) setPaymentPage(paymentPageCount);
+  }, [paymentPage, paymentPageCount]);
+
+  const pageRows = useMemo(() => {
+    const start = (paymentPage - 1) * PAYMENTS_PER_PAGE;
+    return filteredRows.slice(start, start + PAYMENTS_PER_PAGE);
+  }, [filteredRows, paymentPage]);
+
   const chartData = useMemo(
     () =>
-      ledger.rows.map((row) => ({
+      filteredRows.slice(0, 40).map((row) => ({
         name:
           row.merchantDisplay.slice(0, 14) +
           (row.merchantDisplay.length > 14 ? "…" : ""),
         amount: Number.parseFloat(row.amount) || 0,
       })),
-    [ledger.rows],
+    [filteredRows],
   );
 
   const totalVolume = useMemo(
     () =>
-      ledger.rows.reduce(
+      filteredRows.reduce(
         (sum, row) => sum + (Number.isFinite(Number(row.amount)) ? Number(row.amount) : 0),
         0,
       ),
-    [ledger.rows],
+    [filteredRows],
   );
 
   const subscriptions = useMemo(() => detectSubscriptions(ledger.rows), [ledger.rows]);
+
+  const subCharges = useMemo(
+    () => (selectedSub ? rowsForSubscription(selectedSub, ledger.rows) : []),
+    [selectedSub, ledger.rows],
+  );
+
+  const activeStatement = ledger.statements.find((s) => s.id === activeStatementId) ?? null;
 
   return (
     <div className="space-y-6">
       <section className="grid gap-3 md:grid-cols-3">
         <div className="metric-tile">
           <p className="text-muted-foreground text-xs uppercase tracking-[0.12em]">
-            Entries
+            Payments
           </p>
-          <p className="mt-2 text-2xl font-semibold">{ledger.rows.length}</p>
+          <p className="mt-2 text-2xl font-semibold">{filteredRows.length}</p>
         </div>
         <div className="metric-tile">
           <p className="text-muted-foreground text-xs uppercase tracking-[0.12em]">
@@ -334,12 +421,112 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       <Card className="app-surface rounded-2xl">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Statements
+          </CardTitle>
+          <CardDescription>
+            Manage uploads. Open a statement to see its payments; delete removes the statement and
+            its encrypted rows. Re-upload by deleting then importing a new file.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {statementError ? <p className="text-destructive text-sm">{statementError}</p> : null}
+          {!encryptionActive ? (
+            <p className="text-muted-foreground text-sm">Unlock to manage statements.</p>
+          ) : ledger.statements.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              No statements yet. Upload a PDF or CSV below.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>File</TableHead>
+                  <TableHead>Payments</TableHead>
+                  <TableHead>Pages</TableHead>
+                  <TableHead>Uploaded</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ledger.statements.map((s) => {
+                  const open = activeStatementId === s.id;
+                  return (
+                    <TableRow key={s.id} className={open ? "bg-muted/40" : undefined}>
+                      <TableCell className="max-w-[220px] truncate font-medium">
+                        {s.filename}
+                      </TableCell>
+                      <TableCell>{s.payment_count}</TableCell>
+                      <TableCell>{s.page_count ?? "—"}</TableCell>
+                      <TableCell className="text-muted-foreground text-xs">
+                        {new Date(s.created_at).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={open ? "secondary" : "outline"}
+                            onClick={() => openStatement(s.id)}
+                          >
+                            {open ? "Viewing" : "Open"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={deletingId === s.id}
+                            onClick={() => {
+                              if (
+                                confirm(
+                                  `Delete “${s.filename}” and all ${s.payment_count} payments from it?`,
+                                )
+                              ) {
+                                void onDeleteStatement(s.id);
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+          {activeStatement ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">
+                Filtering payments to <span className="text-foreground font-medium">{activeStatement.filename}</span>
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setActiveStatementId(null);
+                  setPaymentPage(1);
+                }}
+              >
+                Show all
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="app-surface rounded-2xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
             <Upload className="h-4 w-4" />
             Statement upload
           </CardTitle>
           <CardDescription>
             Upload a bank PDF, a photo of a statement, or CSV. Text PDFs parse instantly; scanned
             pages and photos run on-device OCR in this browser, then encrypt before ingest.
+            Bank footers and notices are skipped — only real payments are kept.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -378,10 +565,8 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
               <p className="text-sm">
                 Ready to import <strong>{pendingRows.length}</strong> payment
                 {pendingRows.length === 1 ? "" : "s"}
-                {parseWarnings.some((w) => w.startsWith("Read "))
-                  ? ""
-                  : ""}
-                . Preview shows the first {Math.min(12, pendingRows.length)}.
+                {pendingMeta ? ` from ${pendingMeta.filename}` : ""}. Preview shows the first{" "}
+                {Math.min(12, pendingRows.length)}.
               </p>
               <Table>
                 <TableHeader>
@@ -419,6 +604,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
                   disabled={importing || parsingFile}
                   onClick={() => {
                     setPendingRows([]);
+                    setPendingMeta(null);
                     setParseWarnings([]);
                     setImportError(null);
                     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -439,11 +625,11 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
             Subscriptions
           </CardTitle>
           <CardDescription>
-            Recurring bills only (Netflix, YouTube, Spotify…). Groceries, transit, and Afterpay stay
-            in Payments — not listed here. Grouping is local from your decrypted ledger.
+            Recurrence is rolled forward from your statements into the current cycle — next due
+            stays in the present, not stuck in the past. Click a row or calendar chip for charges.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
           {!encryptionActive ? (
             <p className="text-muted-foreground text-sm">Unlock to detect subscriptions.</p>
           ) : subscriptions.length === 0 ? (
@@ -452,108 +638,202 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
               service (e.g. YouTube in June and July).
             </p>
           ) : (
+            <>
+              <SubscriptionCalendar
+                subscriptions={subscriptions}
+                onSelectService={(service) => {
+                  const match = subscriptions.find((s) => s.service === service) ?? null;
+                  setSelectedSub(match);
+                }}
+              />
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Subscription</TableHead>
+                    <TableHead>Payment</TableHead>
+                    <TableHead>Cadence</TableHead>
+                    <TableHead>Last charged</TableHead>
+                    <TableHead>Current period</TableHead>
+                    <TableHead>Next due</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {subscriptions.map((s) => {
+                    const active =
+                      selectedSub?.service === s.service && selectedSub.amount === s.amount;
+                    const period = formatPeriod(s.currentPeriodStart, s.currentPeriodEnd);
+                    return (
+                      <TableRow
+                        key={`${s.service}-${s.amount}-${s.firstPurchaseDate}`}
+                        className={`cursor-pointer ${active ? "bg-muted/40" : "hover:bg-muted/30"}`}
+                        onClick={() => setSelectedSub(active ? null : s)}
+                      >
+                        <TableCell>
+                          <div className="font-medium">{s.service}</div>
+                          <div className="text-muted-foreground text-xs">
+                            {s.chargeCount} charge{s.chargeCount === 1 ? "" : "s"} · {s.confidence}{" "}
+                            confidence
+                            {s.rawMerchants.length > 1
+                              ? ` · ${s.rawMerchants.length} bank labels merged`
+                              : ""}
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">${s.amount}</TableCell>
+                        <TableCell className="capitalize">{s.cadence}</TableCell>
+                        <TableCell>{s.lastChargeDate}</TableCell>
+                        <TableCell className="text-muted-foreground text-sm">
+                          {period ?? "—"}
+                        </TableCell>
+                        <TableCell className="font-medium">{s.nextExpectedDate ?? "—"}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </>
+          )}
+
+          {selectedSub ? (
+            <div className="border-border space-y-3 rounded-xl border p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-medium">{selectedSub.service} charges</p>
+                  <p className="text-muted-foreground text-sm">
+                    ${selectedSub.amount} · {subCharges.length} record
+                    {subCharges.length === 1 ? "" : "s"}
+                    {selectedSub.nextExpectedDate
+                      ? ` · next due ${selectedSub.nextExpectedDate}`
+                      : ""}
+                    {formatPeriod(selectedSub.currentPeriodStart, selectedSub.currentPeriodEnd)
+                      ? ` · period ${formatPeriod(selectedSub.currentPeriodStart, selectedSub.currentPeriodEnd)}`
+                      : ""}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSelectedSub(null)}
+                  aria-label="Close subscription charges"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Merchant</TableHead>
+                    <TableHead>Payment</TableHead>
+                    <TableHead>Date</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {subCharges.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell>
+                        <div className="font-medium">{row.merchantDisplay}</div>
+                        <div className="text-muted-foreground max-w-[280px] truncate font-mono text-xs">
+                          {row.merchantRaw}
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">${row.amount}</TableCell>
+                      <TableCell>{row.date}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <div ref={paymentsRef}>
+        <Card className="app-surface rounded-2xl">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4" />
+              Payments
+            </CardTitle>
+            <CardDescription>
+              Real payment rows only (merchant + amount + transaction date). Bank notices and $0
+              lines are filtered out.
+              {activeStatement ? ` Showing ${activeStatement.filename}.` : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {ledger.loadError ? (
+              <p className="text-destructive text-sm">{ledger.loadError}</p>
+            ) : null}
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Subscription</TableHead>
+                  <TableHead>Merchant</TableHead>
                   <TableHead>Payment</TableHead>
-                  <TableHead>Cadence</TableHead>
-                  <TableHead>First purchase</TableHead>
-                  <TableHead>Last charged</TableHead>
-                  <TableHead>Next expected</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Imported</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {subscriptions.map((s) => (
-                  <TableRow key={`${s.service}-${s.amount}-${s.firstPurchaseDate}`}>
-                    <TableCell>
-                      <div className="font-medium">{s.service}</div>
-                      <div className="text-muted-foreground text-xs">
-                        {s.chargeCount} charge{s.chargeCount === 1 ? "" : "s"} · {s.confidence}{" "}
-                        confidence
-                        {s.rawMerchants.length > 1
-                          ? ` · ${s.rawMerchants.length} bank labels merged`
-                          : ""}
-                      </div>
+                {pageRows.length === 0 && !ledger.loadingRows ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-muted-foreground text-center">
+                      No payments yet.
                     </TableCell>
-                    <TableCell className="font-mono text-sm">${s.amount}</TableCell>
-                    <TableCell className="capitalize">{s.cadence}</TableCell>
-                    <TableCell>{s.firstPurchaseDate}</TableCell>
-                    <TableCell>{s.lastChargeDate}</TableCell>
-                    <TableCell>{s.nextExpectedDate ?? "—"}</TableCell>
+                  </TableRow>
+                ) : null}
+                {pageRows.map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell>
+                      <div className="font-medium">{row.merchantDisplay}</div>
+                      {row.merchantMatched ? (
+                        <div className="text-muted-foreground text-xs">matched locally</div>
+                      ) : (
+                        <div className="text-muted-foreground max-w-[240px] truncate font-mono text-xs">
+                          {row.merchantRaw}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">${row.amount}</TableCell>
+                    <TableCell>{row.date}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {new Date(row.createdAt).toLocaleString()}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-          )}
-        </CardContent>
-      </Card>
 
-      <Card className="app-surface rounded-2xl">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <CalendarDays className="h-4 w-4" />
-            Payments
-          </CardTitle>
-          <CardDescription>
-            Each row is a payment: merchant + amount + transaction date (from your statement).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {ledger.loadError ? (
-            <p className="text-destructive text-sm">{ledger.loadError}</p>
-          ) : null}
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Merchant</TableHead>
-                <TableHead>Payment</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Imported</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {ledger.rows.length === 0 && !ledger.loadingRows ? (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-muted-foreground text-center">
-                    No payments yet.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-              {ledger.rows.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell>
-                    <div className="font-medium">{row.merchantDisplay}</div>
-                    {row.merchantMatched ? (
-                      <div className="text-muted-foreground text-xs">matched locally</div>
-                    ) : (
-                      <div className="text-muted-foreground max-w-[240px] truncate font-mono text-xs">
-                        {row.merchantRaw}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell className="font-mono text-sm">${row.amount}</TableCell>
-                  <TableCell>{row.date}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {new Date(row.createdAt).toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {ledger.hasMore ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void ledger.loadNextPage()}
-              disabled={ledger.loadingRows}
-            >
-              {ledger.loadingRows ? "Loading..." : "Load more"}
-            </Button>
-          ) : null}
-        </CardContent>
-      </Card>
+            {filteredRows.length > 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-muted-foreground text-sm">
+                  Page {paymentPage} of {paymentPageCount} · {filteredRows.length} payment
+                  {filteredRows.length === 1 ? "" : "s"} · {PAYMENTS_PER_PAGE} per page
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={paymentPage <= 1}
+                    onClick={() => setPaymentPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={paymentPage >= paymentPageCount}
+                    onClick={() => setPaymentPage((p) => Math.min(paymentPageCount, p + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
-
