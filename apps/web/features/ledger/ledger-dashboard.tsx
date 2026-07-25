@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Eye, EyeOff, ShieldCheck, Wallet, Receipt, CalendarDays } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  Wallet,
+  Receipt,
+  CalendarDays,
+  Upload,
+} from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -31,6 +39,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { clearSessionCrypto, unlockWithPassword } from "@/lib/crypto";
+import {
+  parseStatementFile,
+  type ParsedStatementRow,
+} from "@/lib/parse-statement";
 import { useLedger } from "@/features/ledger/use-ledger";
 
 type Props = {
@@ -47,6 +59,14 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   const [newAmount, setNewAmount] = useState("");
   const [newDate, setNewDate] = useState(new Date().toISOString().slice(0, 10));
   const [saving, setSaving] = useState(false);
+  const [pendingRows, setPendingRows] = useState<ParsedStatementRow[]>([]);
+  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const ledger = useLedger(accessToken, encryptionActive);
 
@@ -84,6 +104,43 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       // hook exposes detailed loadError after refresh
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function onStatementFile(file: File | null) {
+    setImportError(null);
+    setParseWarnings([]);
+    setPendingRows([]);
+    if (!file) return;
+    try {
+      const parsed = await parseStatementFile(file);
+      setParseWarnings(parsed.warnings);
+      setPendingRows(parsed.rows);
+      if (parsed.rows.length === 0 && parsed.warnings.length === 0) {
+        setImportError("No transactions found in that file.");
+      }
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Failed to read statement");
+    }
+  }
+
+  async function onImportStatement() {
+    if (!encryptionActive || pendingRows.length === 0) return;
+    setImporting(true);
+    setImportError(null);
+    setImportProgress({ done: 0, total: pendingRows.length });
+    try {
+      await ledger.addEntries(pendingRows, (done, total) => {
+        setImportProgress({ done, total });
+      });
+      setPendingRows([]);
+      setParseWarnings([]);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Import failed partway — refresh and retry");
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
     }
   }
 
@@ -260,6 +317,98 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="app-surface rounded-2xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Upload className="h-4 w-4" />
+            Statement upload
+          </CardTitle>
+          <CardDescription>
+            Drop a bank PDF statement — text is read in this browser only, then each row encrypts
+            before ingest. Scanned image PDFs are not supported yet. CSV still works as a fallback.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="statement-file">Bank statement PDF</Label>
+            <Input
+              id="statement-file"
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,application/pdf,.csv,text/csv"
+              disabled={!encryptionActive || importing}
+              onChange={(e) => void onStatementFile(e.target.files?.[0] ?? null)}
+            />
+            <p className="text-muted-foreground text-xs">
+              Try the sample:{" "}
+              <a className="underline underline-offset-2" href="/samples/sample-statement.pdf">
+                sample-statement.pdf
+              </a>
+            </p>
+          </div>
+
+          {parseWarnings.map((w) => (
+            <p key={w} className="text-muted-foreground text-sm">
+              {w}
+            </p>
+          ))}
+          {importError ? <p className="text-destructive text-sm">{importError}</p> : null}
+
+          {pendingRows.length > 0 ? (
+            <div className="space-y-3">
+              <p className="text-sm">
+                Previewing {pendingRows.length} row{pendingRows.length === 1 ? "" : "s"} (showing up
+                to 8).
+              </p>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Merchant</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Date</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pendingRows.slice(0, 8).map((row) => (
+                    <TableRow key={`${row.line}-${row.merchantRaw}-${row.date}`}>
+                      <TableCell className="max-w-[280px] truncate font-mono text-xs">
+                        {row.merchantRaw}
+                      </TableCell>
+                      <TableCell>{row.amount}</TableCell>
+                      <TableCell>{row.date}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  disabled={!encryptionActive || importing}
+                  onClick={() => void onImportStatement()}
+                >
+                  {importing
+                    ? `Encrypting ${importProgress?.done ?? 0}/${importProgress?.total ?? pendingRows.length}…`
+                    : `Encrypt and import ${pendingRows.length}`}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={importing}
+                  onClick={() => {
+                    setPendingRows([]);
+                    setParseWarnings([]);
+                    setImportError(null);
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                  }}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <Card className="app-surface rounded-2xl">
         <CardHeader>

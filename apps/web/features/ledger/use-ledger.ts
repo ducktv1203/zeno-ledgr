@@ -83,6 +83,27 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
     [accessToken, encryptionActive, loadFirstPage],
   );
 
+  const addEntries = useCallback(
+    async (
+      payloads: { merchantRaw: string; amount: string; date: string }[],
+      onProgress?: (done: number, total: number) => void,
+    ) => {
+      if (!accessToken || !encryptionActive || payloads.length === 0) {
+        return { imported: 0 };
+      }
+      let imported = 0;
+      for (const payload of payloads) {
+        const encrypted = await encryptLedgerPayload(payload);
+        await apiIngest(accessToken, encrypted);
+        imported += 1;
+        onProgress?.(imported, payloads.length);
+      }
+      await loadFirstPage();
+      return { imported };
+    },
+    [accessToken, encryptionActive, loadFirstPage],
+  );
+
   return {
     rows,
     loadError,
@@ -91,6 +112,7 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
     loadFirstPage,
     loadNextPage,
     addEntry,
+    addEntries,
   };
 }
 
