@@ -63,6 +63,8 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   const [parseWarnings, setParseWarnings] = useState<string[]>([]);
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [parsingFile, setParsingFile] = useState(false);
+  const [parseStatus, setParseStatus] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -111,9 +113,13 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
     setImportError(null);
     setParseWarnings([]);
     setPendingRows([]);
+    setParseStatus(null);
     if (!file) return;
+    setParsingFile(true);
     try {
-      const parsed = await parseStatementFile(file);
+      const parsed = await parseStatementFile(file, (p) => {
+        setParseStatus(p.message);
+      });
       setParseWarnings(parsed.warnings);
       setPendingRows(parsed.rows);
       if (parsed.rows.length === 0 && parsed.warnings.length === 0) {
@@ -121,6 +127,9 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       }
     } catch (e) {
       setImportError(e instanceof Error ? e.message : "Failed to read statement");
+    } finally {
+      setParsingFile(false);
+      setParseStatus(null);
     }
   }
 
@@ -325,28 +334,32 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
             Statement upload
           </CardTitle>
           <CardDescription>
-            Drop a bank PDF statement — text is read in this browser only, then each row encrypts
-            before ingest. Scanned image PDFs are not supported yet. CSV still works as a fallback.
+            Upload a bank PDF, a photo of a statement, or CSV. Text PDFs parse instantly; scanned
+            pages and photos run on-device OCR in this browser, then encrypt before ingest.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="statement-file">Bank statement PDF</Label>
+            <Label htmlFor="statement-file">Bank statement</Label>
             <Input
               id="statement-file"
               ref={fileInputRef}
               type="file"
-              accept=".pdf,application/pdf,.csv,text/csv"
-              disabled={!encryptionActive || importing}
+              accept=".pdf,application/pdf,image/*,.png,.jpg,.jpeg,.webp,.csv,text/csv"
+              disabled={!encryptionActive || importing || parsingFile}
               onChange={(e) => void onStatementFile(e.target.files?.[0] ?? null)}
             />
             <p className="text-muted-foreground text-xs">
-              Try the sample:{" "}
+              Sample:{" "}
               <a className="underline underline-offset-2" href="/samples/sample-statement.pdf">
                 sample-statement.pdf
               </a>
             </p>
           </div>
+
+          {parsingFile && parseStatus ? (
+            <p className="text-sm text-muted-foreground">{parseStatus}</p>
+          ) : null}
 
           {parseWarnings.map((w) => (
             <p key={w} className="text-muted-foreground text-sm">
@@ -394,7 +407,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={importing}
+                  disabled={importing || parsingFile}
                   onClick={() => {
                     setPendingRows([]);
                     setParseWarnings([]);
