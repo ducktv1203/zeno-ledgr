@@ -122,6 +122,49 @@ export function rollForwardExpected(
   return { nextDue: due, periodStart, periodEnd };
 }
 
+/**
+ * Apply the user's "yes, I still pay this" to a recurrence the detector called
+ * finished. Statement history routinely stops months before today — importing
+ * one old statement should not mean nothing is ever due again — so a confirmed
+ * subscription gets its schedule projected forward like any other.
+ */
+export function reviveSubscription(sub: DetectedSubscription): DetectedSubscription {
+  if (sub.status === "active" || !sub.stepDays) return sub;
+  const rolled = rollForwardExpected(sub.lastChargeDate, sub.stepDays);
+  return {
+    ...sub,
+    status: "active",
+    nextExpectedDate: rolled.nextDue,
+    currentPeriodStart: rolled.periodStart,
+    currentPeriodEnd: rolled.periodEnd,
+  };
+}
+
+export type SubscriptionGroups = {
+  /** Billing now — drives the calendar, the count and the monthly total. */
+  active: DetectedSubscription[];
+  /** Went quiet; waiting on the user to say whether they still pay for it. */
+  review: DetectedSubscription[];
+  /** Struck off as ordinary spending. */
+  removed: DetectedSubscription[];
+};
+
+/** Split detections by the detector's verdict and the user's, in that order. */
+export function groupSubscriptions(
+  subscriptions: DetectedSubscription[],
+  overrides: { dismissed: Set<string>; confirmed: Set<string> },
+): SubscriptionGroups {
+  const groups: SubscriptionGroups = { active: [], review: [], removed: [] };
+
+  for (const sub of subscriptions) {
+    if (overrides.dismissed.has(sub.key)) groups.removed.push(sub);
+    else if (sub.status === "active") groups.active.push(sub);
+    else if (overrides.confirmed.has(sub.key)) groups.active.push(reviveSubscription(sub));
+    else groups.review.push(sub);
+  }
+  return groups;
+}
+
 /** Expected due dates that fall inside [rangeStart, rangeEnd] inclusive. */
 export function expectedDatesInRange(
   sub: DetectedSubscription,

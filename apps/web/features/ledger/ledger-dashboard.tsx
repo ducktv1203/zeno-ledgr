@@ -20,6 +20,7 @@ import { useSubscriptionOverrides } from "@/lib/subscription-overrides";
 import { useCryptoUnlocked } from "@/lib/use-crypto-status";
 import {
   detectSubscriptions,
+  groupSubscriptions,
   rowsForSubscription,
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
@@ -41,7 +42,7 @@ function monthlyEquivalent(subscriptions: DetectedSubscription[]): number {
 export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   // Sourced from the crypto module so an idle auto-lock closes the book too.
   const encryptionActive = useCryptoUnlocked();
-  const { dismissed } = useSubscriptionOverrides();
+  const { dismissed, confirmed } = useSubscriptionOverrides();
   const [activeStatementId, setActiveStatementId] = useState<string | null>(null);
   const [selectedSub, setSelectedSub] = useState<DetectedSubscription | null>(null);
 
@@ -80,11 +81,11 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
 
   const subscriptions = useMemo(() => detectSubscriptions(ledger.rows), [ledger.rows]);
 
-  // Headline figures describe what is still billing — lapsed recurrences and
-  // anything the user struck off are counted nowhere.
+  // Headline figures describe what is still billing: recurrences that went
+  // quiet are left out until the user confirms they still pay for them.
   const billingNow = useMemo(
-    () => subscriptions.filter((sub) => sub.status === "active" && !dismissed.has(sub.key)),
-    [subscriptions, dismissed],
+    () => groupSubscriptions(subscriptions, { dismissed, confirmed }).active,
+    [subscriptions, dismissed, confirmed],
   );
 
   const manualCount = useMemo(

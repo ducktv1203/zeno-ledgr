@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Ban, RotateCcw, X } from "lucide-react";
+import { Ban, Check, RotateCcw, X } from "lucide-react";
 
 import { EmptyNote } from "@/components/section";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,7 @@ import {
 import { SubscriptionCalendar } from "@/features/ledger/subscription-calendar";
 import {
   formatPeriod,
+  groupSubscriptions,
   todayIso,
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
@@ -55,22 +56,14 @@ function monthsAgo(days: number): string {
 }
 
 export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect }: Props) {
-  const { dismissed, dismiss, restore, restoreAll } = useSubscriptionOverrides();
-  const [showLapsed, setShowLapsed] = useState(false);
+  const { dismissed, confirmed, dismiss, confirm, reset, resetAll } = useSubscriptionOverrides();
+  const [showReview, setShowReview] = useState(true);
   const [showDismissed, setShowDismissed] = useState(false);
 
-  const groups = useMemo(() => {
-    const active: DetectedSubscription[] = [];
-    const lapsed: DetectedSubscription[] = [];
-    const removed: DetectedSubscription[] = [];
-
-    for (const sub of subscriptions) {
-      if (dismissed.has(sub.key)) removed.push(sub);
-      else if (sub.status === "lapsed") lapsed.push(sub);
-      else active.push(sub);
-    }
-    return { active, lapsed, removed };
-  }, [subscriptions, dismissed]);
+  const groups = useMemo(
+    () => groupSubscriptions(subscriptions, { dismissed, confirmed }),
+    [subscriptions, dismissed, confirmed],
+  );
 
   function remove(sub: DetectedSubscription) {
     dismiss(sub.key);
@@ -98,8 +91,9 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
         />
       ) : (
         <EmptyNote>
-          Nothing is billing right now. Every recurrence we found has either stopped or been
-          dismissed, so the calendar is clear.
+          {groups.review.length > 0
+            ? "Nothing is on the calendar yet. Every recurrence we found went quiet before your statements end — answer the question below and the ones you still pay for will appear here."
+            : "Nothing is billing right now. Every recurrence we found has been struck off, so the calendar is clear."}
         </EmptyNote>
       )}
 
@@ -109,27 +103,31 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
           <SubscriptionTable
             subscriptions={groups.active}
             selected={selected}
+            confirmed={confirmed}
             onSelect={onSelect}
             onDismiss={remove}
           />
         </>
       ) : null}
 
-      {groups.lapsed.length > 0 ? (
+      {groups.review.length > 0 ? (
         <GroupDisclosure
-          open={showLapsed}
-          onToggle={() => setShowLapsed((v) => !v)}
-          label={`${groups.lapsed.length} stopped billing`}
-          hint="Charged on a cycle once, then went quiet for several cycles. Not counted in your monthly total and never shown on the calendar."
+          open={showReview}
+          onToggle={() => setShowReview((v) => !v)}
+          label={`${groups.review.length} went quiet — still paying?`}
+          hint="These billed on a cycle and then stopped. That usually means you cancelled, but it also happens when your imported statements simply end there. Say you still pay one and it goes straight back on the calendar."
         >
           <ul className="divide-y divide-border border-y border-border">
-            {groups.lapsed.map((sub) => (
+            {groups.review.map((sub) => (
               <li key={sub.key} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="text-[13.5px] font-medium">{sub.service}</span>
-                    <Badge variant="outline">Ended</Badge>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onSelect(selected?.key === sub.key ? null : sub)}
+                    className="link-underline text-left text-[13.5px] font-medium"
+                  >
+                    {sub.service}
+                  </button>
                   <p className="money mt-1 text-[11.5px] text-muted-foreground">
                     ${formatMoney(sub.amount)} {sub.cadence} · last charged{" "}
                     {formatDate(sub.lastChargeDate)} ({monthsAgo(sub.daysSinceLastCharge)})
@@ -137,17 +135,13 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1.5">
-                  <Button type="button" size="sm" variant="outline" onClick={() => onSelect(sub)}>
-                    Charges
+                  <Button type="button" size="sm" variant="outline" onClick={() => confirm(sub.key)}>
+                    <Check className="h-3.5 w-3.5" />
+                    Still paying
                   </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => remove(sub)}
-                    aria-label={`Dismiss ${sub.service}`}
-                  >
+                  <Button type="button" size="sm" variant="ghost" onClick={() => remove(sub)}>
                     <Ban className="h-3.5 w-3.5" />
+                    Not a subscription
                   </Button>
                 </div>
               </li>
@@ -165,7 +159,7 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
           action={
             <button
               type="button"
-              onClick={restoreAll}
+              onClick={resetAll}
               className="link-underline font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground"
             >
               Restore all
@@ -179,7 +173,7 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
                   {sub.service}
                   <span className="money ml-2 text-[11.5px]">${formatMoney(sub.amount)}</span>
                 </span>
-                <Button type="button" size="sm" variant="ghost" onClick={() => restore(sub.key)}>
+                <Button type="button" size="sm" variant="ghost" onClick={() => reset(sub.key)}>
                   <RotateCcw className="h-3.5 w-3.5" />
                   Restore
                 </Button>
@@ -199,11 +193,13 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
 function SubscriptionTable({
   subscriptions,
   selected,
+  confirmed,
   onSelect,
   onDismiss,
 }: {
   subscriptions: DetectedSubscription[];
   selected: DetectedSubscription | null;
+  confirmed: Set<string>;
   onSelect: (subscription: DetectedSubscription | null) => void;
   onDismiss: (subscription: DetectedSubscription) => void;
 }) {
@@ -231,9 +227,18 @@ function SubscriptionTable({
               onClick={() => onSelect(open ? null : sub)}
             >
               <TableCell>
-                <div className="flex items-baseline gap-2">
+                <div className="flex flex-wrap items-baseline gap-2">
                   <span className="font-display text-lg leading-none">{sub.service}</span>
-                  {sub.confidence === "high" ? (
+                  {confirmed.has(sub.key) ? (
+                    <Badge
+                      variant="ochre"
+                      title={`You confirmed this one. Last charge on record: ${formatDate(
+                        sub.lastChargeDate,
+                      )}`}
+                    >
+                      Kept by you
+                    </Badge>
+                  ) : sub.confidence === "high" ? (
                     <Badge variant="success">Confirmed</Badge>
                   ) : (
                     <Badge variant="secondary">{sub.confidence}</Badge>

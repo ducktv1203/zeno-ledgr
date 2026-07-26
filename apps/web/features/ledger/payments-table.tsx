@@ -39,6 +39,28 @@ import { cn } from "@/lib/utils";
 
 type SortKey = "date" | "amount" | "merchant";
 type SortDirection = "asc" | "desc";
+/** `null` means statement order — newest first, exactly as imported. */
+type Sort = { key: SortKey; direction: SortDirection } | null;
+
+const SORT_LABELS: Record<SortKey, string> = {
+  date: "Date",
+  amount: "Amount",
+  merchant: "Merchant",
+};
+
+/** Names read best A→Z; dates and amounts read best largest-first. */
+function firstDirection(key: SortKey): SortDirection {
+  return key === "merchant" ? "asc" : "desc";
+}
+
+/** Each header cycles: first direction → opposite → off. */
+function nextSort(current: Sort, key: SortKey): Sort {
+  if (current?.key !== key) return { key, direction: firstDirection(key) };
+  if (current.direction === firstDirection(key)) {
+    return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+  }
+  return null;
+}
 
 const PAGE_SIZES: { value: PageSize; label: string }[] = [
   { value: "25", label: "25" },
@@ -74,8 +96,7 @@ function compareRows(a: DecryptedLedgerRow, b: DecryptedLedgerRow, key: SortKey)
 export function PaymentsTable({ rows, loading }: Props) {
   const { preferences } = usePreferences();
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("date");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [sort, setSort] = useState<Sort>(null);
   const [viewOverride, setViewOverride] = useState<ViewMode | null>(null);
   const [pageSizeOverride, setPageSizeOverride] = useState<PageSize | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -108,20 +129,21 @@ export function PaymentsTable({ rows, loading }: Props) {
   }, [rows, query, filters]);
 
   const sorted = useMemo(() => {
-    const direction = sortDirection === "asc" ? 1 : -1;
+    if (!sort) return filtered;
+    const direction = sort.direction === "asc" ? 1 : -1;
     return [...filtered].sort((a, b) => {
-      const primary = compareRows(a, b, sortKey) * direction;
+      const primary = compareRows(a, b, sort.key) * direction;
       // Stable tiebreak so equal amounts/merchants stay in date order.
       return primary !== 0 ? primary : b.date.localeCompare(a.date);
     });
-  }, [filtered, sortKey, sortDirection]);
+  }, [filtered, sort]);
 
   const perPage = pageSize === "all" ? Math.max(sorted.length, 1) : Number.parseInt(pageSize, 10);
   const pageCount = Math.max(1, Math.ceil(sorted.length / perPage));
 
   useEffect(() => {
     setPage(1);
-  }, [query, filters, pageSize, sortKey, sortDirection]);
+  }, [query, filters, pageSize, sort]);
 
   useEffect(() => {
     setPage((current) => Math.min(current, pageCount));
@@ -134,12 +156,7 @@ export function PaymentsTable({ rows, loading }: Props) {
   );
 
   function toggleSort(key: SortKey) {
-    if (key === sortKey) {
-      setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDirection(key === "merchant" ? "asc" : "desc");
-    }
+    setSort((current) => nextSort(current, key));
   }
 
   if (loading && rows.length === 0) {
@@ -221,6 +238,18 @@ export function PaymentsTable({ rows, loading }: Props) {
           />
         </div>
 
+        {sort ? (
+          <button
+            type="button"
+            onClick={() => setSort(null)}
+            className="inline-flex items-center gap-1.5 self-start rounded-full border border-border bg-secondary/50 py-1 pl-2.5 pr-2 font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {SORT_LABELS[sort.key]} {sort.direction === "asc" ? "↑" : "↓"}
+            <X className="h-3 w-3" />
+            <span className="sr-only">Clear sorting and return to statement order</span>
+          </button>
+        ) : null}
+
         {filtersOpen ? (
           <div className="panel-flush grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-4">
             <FilterField
@@ -296,29 +325,9 @@ export function PaymentsTable({ rows, loading }: Props) {
           <TableHeader>
             <TableRow>
               <TableHead className="w-10 text-right">#</TableHead>
-              <SortableHead
-                label="Merchant"
-                sortKey="merchant"
-                activeKey={sortKey}
-                direction={sortDirection}
-                onSort={toggleSort}
-              />
-              <SortableHead
-                label="Amount"
-                sortKey="amount"
-                activeKey={sortKey}
-                direction={sortDirection}
-                onSort={toggleSort}
-                align="right"
-              />
-              <SortableHead
-                label="Date"
-                sortKey="date"
-                activeKey={sortKey}
-                direction={sortDirection}
-                onSort={toggleSort}
-                align="right"
-              />
+              <SortableHead sortKey="merchant" sort={sort} onSort={toggleSort} />
+              <SortableHead sortKey="amount" sort={sort} onSort={toggleSort} align="right" />
+              <SortableHead sortKey="date" sort={sort} onSort={toggleSort} align="right" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -447,37 +456,49 @@ function FilterField({
 }
 
 function SortableHead({
-  label,
   sortKey,
-  activeKey,
-  direction,
+  sort,
   onSort,
   align = "left",
 }: {
-  label: string;
   sortKey: SortKey;
-  activeKey: SortKey;
-  direction: SortDirection;
+  sort: Sort;
   onSort: (key: SortKey) => void;
   align?: "left" | "right";
 }) {
-  const active = sortKey === activeKey;
-  const Arrow = direction === "asc" ? ArrowUp : ArrowDown;
+  const label = SORT_LABELS[sortKey];
+  const active = sort?.key === sortKey;
+  const Arrow = active && sort.direction === "asc" ? ArrowUp : ArrowDown;
+  const upcoming = nextSort(sort, sortKey);
 
   return (
-    <TableHead className={align === "right" ? "text-right" : undefined}>
+    <TableHead
+      className={cn("group/head", align === "right" && "text-right")}
+      aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
+    >
       <button
         type="button"
         onClick={() => onSort(sortKey)}
-        aria-label={`Sort by ${label}`}
+        title={
+          upcoming
+            ? `Sort by ${label.toLowerCase()}, ${
+                upcoming.direction === "asc" ? "ascending" : "descending"
+              }`
+            : "Back to statement order"
+        }
         className={cn(
           "inline-flex items-center gap-1 transition-colors hover:text-foreground",
           align === "right" && "flex-row-reverse",
-          active ? "text-foreground" : undefined,
+          active && "text-foreground",
         )}
       >
         {label}
-        <Arrow className={cn("h-3 w-3", active ? "opacity-100" : "opacity-0")} />
+        <Arrow
+          className={cn(
+            "h-3 w-3 transition-opacity",
+            active ? "opacity-100" : "opacity-0 group-hover/head:opacity-40",
+          )}
+        />
       </button>
     </TableHead>
   );
