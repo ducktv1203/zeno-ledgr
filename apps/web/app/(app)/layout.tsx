@@ -1,16 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { LayoutDashboard, Settings, LogOut, Lock } from "lucide-react";
+import { LogOut } from "lucide-react";
+
 import { SecurityStatusBadge } from "@/components/security-status-badge";
 import { Button } from "@/components/ui/button";
 import { clearSessionCrypto, isCryptoUnlocked } from "@/lib/crypto";
 import { useAuthClient } from "@/features/auth/use-auth";
+import { cn } from "@/lib/utils";
+
+const NAV = [
+  { href: "/dashboard", label: "Ledger" },
+  { href: "/settings", label: "Settings" },
+];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const supabase = useAuthClient();
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
@@ -41,66 +49,61 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (!ready || !authed) {
     return (
-      <main className="mx-auto max-w-6xl p-6">
-        <p className="text-muted-foreground text-sm">Loading dashboard...</p>
+      <main className="mx-auto max-w-6xl px-6 py-16">
+        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+          Opening ledger…
+        </p>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto min-h-screen max-w-[1400px] p-4 md:p-6">
-      <div className="grid gap-4 lg:grid-cols-[250px_1fr]">
-        <aside className="app-surface rounded-2xl p-4">
-          <div className="border-b border-border pb-4">
-            <p className="text-muted-foreground text-[11px] uppercase tracking-[0.18em]">
-              ZenoLedgr
-            </p>
-            <p className="mt-2 text-lg font-semibold">Operations Console</p>
-          </div>
-          <nav className="mt-4 space-y-2">
-            <Button variant="secondary" className="w-full justify-start gap-2" asChild>
-              <Link href="/dashboard">
-                <LayoutDashboard className="h-4 w-4" />
-                Dashboard
-              </Link>
-            </Button>
-            <Button variant="ghost" className="w-full justify-start gap-2" asChild>
-              <Link href="/settings">
-                <Settings className="h-4 w-4" />
-                Settings
-              </Link>
-            </Button>
-          </nav>
-          <div className="mt-6 border-t border-border pt-4">
-            <div className="mb-3">
-              <SecurityStatusBadge encryptionActive={cryptoActive} />
-            </div>
-            <Button variant="outline" className="w-full justify-start gap-2" onClick={() => void signOut()}>
-              <LogOut className="h-4 w-4" />
-              Sign out
-            </Button>
-          </div>
-        </aside>
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-[1180px] flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3">
+          <Link href="/dashboard" className="flex items-baseline gap-2">
+            <span className="font-display text-lg leading-none">ZenoLedgr</span>
+          </Link>
 
-        <section className="space-y-4">
-          <header className="app-surface rounded-2xl px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="space-y-1">
-                <h1 className="text-2xl font-semibold tracking-tight">Encrypted Finance Dashboard</h1>
-                <p className="text-muted-foreground text-sm">
-                  Blind orchestration mode active. Sensitive ledger data remains local.
-                </p>
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs">
-                <Lock className="h-3.5 w-3.5" />
-                Zero-knowledge path
-              </div>
-            </div>
-          </header>
-          {children}
-        </section>
-      </div>
-    </main>
+          <nav className="flex items-center gap-1">
+            {NAV.map((item) => {
+              const active = pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "relative px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] transition-colors",
+                    active
+                      ? "text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {item.label}
+                  {active ? (
+                    <span className="absolute -bottom-[13px] left-0 h-[2px] w-full bg-oxblood" />
+                  ) : null}
+                </Link>
+              );
+            })}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-3">
+            <SecurityStatusBadge encryptionActive={cryptoActive} />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void signOut()}
+              aria-label="Sign out"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Sign out</span>
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-[1180px] px-6 pb-20 pt-10">{children}</main>
+    </div>
   );
 }
-

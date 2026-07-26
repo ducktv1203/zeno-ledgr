@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ArrowRight } from "lucide-react";
+
+import { PasswordField } from "@/components/password-field";
+import { ErrorNote } from "@/components/section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +17,6 @@ export function SignInForm() {
   const supabase = useAuthClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +42,7 @@ export function SignInForm() {
   }
 
   return (
-    <form className="space-y-4" onSubmit={onSubmit}>
+    <form className="space-y-5" onSubmit={onSubmit}>
       <div className="space-y-2">
         <Label htmlFor="signin-email">Email</Label>
         <Input
@@ -51,37 +54,29 @@ export function SignInForm() {
           autoComplete="email"
         />
       </div>
-      <div className="space-y-2">
-        <Label htmlFor="signin-password">Password</Label>
-        <div className="flex gap-2">
-          <Input
-            id="signin-password"
-            type={showPassword ? "text" : "password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setShowPassword((v) => !v)}
-          >
-            {showPassword ? "Hide" : "Show"}
-          </Button>
-        </div>
-      </div>
-      {error ? <p className="text-destructive text-sm">{error}</p> : null}
-      <Button type="submit" disabled={loading} className="w-full">
-        {loading ? "Signing in..." : "Sign in"}
+
+      <PasswordField
+        id="signin-password"
+        label="Password"
+        value={password}
+        onChange={setPassword}
+        autoComplete="current-password"
+        required
+      />
+
+      {error ? <ErrorNote>{error}</ErrorNote> : null}
+
+      <Button type="submit" disabled={loading} className="w-full" size="lg">
+        {loading ? "Signing in…" : "Sign in"}
+        {loading ? null : <ArrowRight className="h-4 w-4" />}
       </Button>
-      <p className="text-muted-foreground text-sm">
+
+      <p className="text-[13px] text-muted-foreground">
         Need an account?{" "}
-        <Link className="font-medium text-foreground underline underline-offset-4" href="/signup">
-          Sign up
+        <Link className="link-underline font-medium text-foreground" href="/signup">
+          Create one
         </Link>
       </p>
     </form>
   );
 }
-
