@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 
 import { SecurityStatusBadge } from "@/components/security-status-badge";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { clearSessionCrypto, isCryptoUnlocked } from "@/lib/crypto";
 import { useAuthClient } from "@/features/auth/use-auth";
@@ -88,8 +89,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             })}
           </nav>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-2">
             <SecurityStatusBadge encryptionActive={cryptoActive} />
+            <ThemeToggle />
             <Button
               variant="ghost"
               size="sm"

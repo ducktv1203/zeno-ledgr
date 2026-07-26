@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { Lock } from "lucide-react";
 
+import { ThemeToggle } from "@/components/theme-toggle";
+
 const ASSURANCES = [
   "Statements are parsed on this device",
   "Rows are sealed with AES-256-GCM before upload",
@@ -41,7 +43,9 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         </ul>
       </aside>
 
-      <main className="flex flex-col justify-center px-6 py-12 sm:px-10">
+      <main className="relative flex flex-col justify-center px-6 py-12 sm:px-10">
+        <ThemeToggle className="absolute right-4 top-4" />
+
         <Link href="/" className="mb-10 flex items-baseline gap-2 lg:hidden">
           <span className="font-display text-lg leading-none">ZenoLedgr</span>
           <span className="eyebrow">Private Ledger</span>

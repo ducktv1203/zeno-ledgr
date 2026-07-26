@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, Lock } from "lucide-react";
 
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 
 const SPECIMEN = [
@@ -37,6 +38,7 @@ export default function Home() {
             <span className="eyebrow hidden sm:inline">Private Ledger</span>
           </Link>
           <nav className="flex items-center gap-1">
+            <ThemeToggle />
             <Button asChild variant="ghost" size="sm">
               <Link href="/signin">Sign in</Link>
             </Button>

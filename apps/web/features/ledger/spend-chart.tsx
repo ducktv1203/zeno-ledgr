@@ -16,17 +16,31 @@ import { EmptyNote } from "@/components/section";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatMoney } from "@/lib/format";
 import type { DecryptedLedgerRow } from "@/lib/types";
+import { useTheme } from "@/lib/use-theme";
 
 const TOP_N = 8;
 
 /*
  * Recharts writes these straight into SVG presentation attributes, where
- * `var()` never resolves — so the theme colours are inlined here.
+ * `var()` never resolves — so each theme's colours are inlined and picked at
+ * render time instead of read from CSS custom properties.
  */
-const BAR_LEAD = "hsl(4, 65%, 38%)";
-const BAR_REST = "hsl(30, 13%, 9%)";
-const AXIS_TEXT = "hsl(33, 10%, 38%)";
-const CURSOR = "hsl(40, 30%, 87%)";
+const PALETTE = {
+  light: {
+    barLead: "hsl(4, 65%, 38%)",
+    barRest: "hsl(30, 13%, 9%)",
+    barRestOpacity: 0.26,
+    axisText: "hsl(33, 10%, 38%)",
+    cursor: "hsl(40, 30%, 87%)",
+  },
+  dark: {
+    barLead: "hsl(6, 66%, 57%)",
+    barRest: "hsl(40, 28%, 91%)",
+    barRestOpacity: 0.24,
+    axisText: "hsl(36, 9%, 60%)",
+    cursor: "hsl(30, 9%, 18%)",
+  },
+} as const;
 
 type Props = {
   rows: DecryptedLedgerRow[];
@@ -37,6 +51,9 @@ type Slice = { name: string; total: number; count: number };
 
 /** Where the money actually goes: spend aggregated per merchant, biggest first. */
 export function SpendChart({ rows, loading }: Props) {
+  const { theme } = useTheme();
+  const palette = PALETTE[theme];
+
   const data = useMemo<Slice[]>(() => {
     const byMerchant = new Map<string, Slice>();
     for (const row of rows) {
@@ -77,10 +94,10 @@ export function SpendChart({ rows, loading }: Props) {
             width={132}
             tickLine={false}
             axisLine={false}
-            tick={{ fontSize: 12, fill: AXIS_TEXT }}
+            tick={{ fontSize: 12, fill: palette.axisText }}
           />
           <Tooltip
-            cursor={{ fill: CURSOR, fillOpacity: 0.55 }}
+            cursor={{ fill: palette.cursor, fillOpacity: 0.55 }}
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
               const slice = payload[0]!.payload as Slice;
@@ -99,15 +116,15 @@ export function SpendChart({ rows, loading }: Props) {
             {data.map((slice, i) => (
               <Cell
                 key={slice.name}
-                fill={i === 0 ? BAR_LEAD : BAR_REST}
-                fillOpacity={i === 0 ? 1 : 0.26}
+                fill={i === 0 ? palette.barLead : palette.barRest}
+                fillOpacity={i === 0 ? 1 : palette.barRestOpacity}
               />
             ))}
             <LabelList
               dataKey="total"
               position="right"
               offset={8}
-              fill={AXIS_TEXT}
+              fill={palette.axisText}
               fontSize={11}
               fontFamily="var(--font-mono)"
               formatter={(value: number) => `$${formatMoney(value)}`}
