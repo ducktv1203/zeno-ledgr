@@ -53,6 +53,20 @@ export function categoryMeta(id: SpendCategoryId): SpendCategory {
   return BY_ID.get(id) ?? BY_ID.get("other")!;
 }
 
+/**
+ * Stable key for merchant → category overrides. Prefer the cleaned display
+ * name so every Woolworths row shares one mapping.
+ */
+export function categoryMerchantKey(
+  row: Pick<DecryptedLedgerRow, "merchantRaw" | "merchantDisplay"> | { name: string },
+): string {
+  const label =
+    "name" in row
+      ? row.name
+      : row.merchantDisplay || row.merchantRaw || "unknown";
+  return label.toLowerCase().replace(/\s+/g, " ").trim() || "unknown";
+}
+
 type Rule = { category: SpendCategoryId; match: RegExp };
 
 /**
@@ -138,7 +152,10 @@ const RULES: Rule[] = [
   },
 ];
 
-export function categorizePayment(row: Pick<DecryptedLedgerRow, "merchantRaw" | "merchantDisplay">): SpendCategoryId {
+/** Seed-rule guess only — ignores user overrides. */
+export function categorizePaymentByRules(
+  row: Pick<DecryptedLedgerRow, "merchantRaw" | "merchantDisplay">,
+): SpendCategoryId {
   const hay = `${row.merchantDisplay} ${row.merchantRaw}`.trim();
   if (!hay) return "other";
   for (const rule of RULES) {
@@ -146,6 +163,28 @@ export function categorizePayment(row: Pick<DecryptedLedgerRow, "merchantRaw" | 
   }
   return "other";
 }
+
+/**
+ * Resolve category: user override → seed rules → other.
+ */
+export function categorizePayment(
+  row: Pick<DecryptedLedgerRow, "merchantRaw" | "merchantDisplay">,
+  overrides?: ReadonlyMap<string, SpendCategoryId> | null,
+): SpendCategoryId {
+  const key = categoryMerchantKey(row);
+  const overridden = overrides?.get(key);
+  if (overridden) return overridden;
+  return categorizePaymentByRules(row);
+}
+
+export type CategoryMerchant = {
+  name: string;
+  key: string;
+  total: number;
+  count: number;
+  /** True when this merchant has a saved override. */
+  overridden: boolean;
+};
 
 export type CategorySlice = {
   id: SpendCategoryId;
@@ -156,7 +195,7 @@ export type CategorySlice = {
   count: number;
   /** Share of outflow spend (0–1). Income/transfer slices use 0. */
   share: number;
-  merchants: { name: string; total: number; count: number }[];
+  merchants: CategoryMerchant[];
 };
 
 export type SpendBreakdown = {
@@ -168,11 +207,14 @@ export type SpendBreakdown = {
 };
 
 /** Aggregate visible ledger rows into category slices (biggest spend first). */
-export function buildSpendBreakdown(rows: DecryptedLedgerRow[]): SpendBreakdown {
+export function buildSpendBreakdown(
+  rows: DecryptedLedgerRow[],
+  overrides?: ReadonlyMap<string, SpendCategoryId> | null,
+): SpendBreakdown {
   type Acc = {
     total: number;
     count: number;
-    merchants: Map<string, { total: number; count: number }>;
+    merchants: Map<string, { name: string; total: number; count: number; overridden: boolean }>;
   };
 
   const byCat = new Map<SpendCategoryId, Acc>();
@@ -181,7 +223,8 @@ export function buildSpendBreakdown(rows: DecryptedLedgerRow[]): SpendBreakdown 
     const amount = Number.parseFloat(row.amount);
     if (!Number.isFinite(amount) || amount <= 0) continue;
 
-    const id = categorizePayment(row);
+    const key = categoryMerchantKey(row);
+    const id = categorizePayment(row, overrides);
     const merchant = row.merchantDisplay || row.merchantRaw || "Unknown";
     let acc = byCat.get(id);
     if (!acc) {
@@ -190,12 +233,17 @@ export function buildSpendBreakdown(rows: DecryptedLedgerRow[]): SpendBreakdown 
     }
     acc.total += amount;
     acc.count += 1;
-    const m = acc.merchants.get(merchant);
+    const m = acc.merchants.get(key);
     if (m) {
       m.total += amount;
       m.count += 1;
     } else {
-      acc.merchants.set(merchant, { total: amount, count: 1 });
+      acc.merchants.set(key, {
+        name: merchant,
+        total: amount,
+        count: 1,
+        overridden: Boolean(overrides?.has(key)),
+      });
     }
   }
 
@@ -218,9 +266,15 @@ export function buildSpendBreakdown(rows: DecryptedLedgerRow[]): SpendBreakdown 
     .map(([id, acc]) => {
       const meta = categoryMeta(id);
       const merchants = [...acc.merchants.entries()]
-        .map(([name, m]) => ({ name, total: m.total, count: m.count }))
+        .map(([key, m]) => ({
+          name: m.name,
+          key,
+          total: m.total,
+          count: m.count,
+          overridden: m.overridden,
+        }))
         .sort((a, b) => b.total - a.total)
-        .slice(0, 6);
+        .slice(0, 8);
       return {
         id,
         label: meta.label,

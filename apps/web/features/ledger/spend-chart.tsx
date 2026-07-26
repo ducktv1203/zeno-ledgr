@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -13,11 +13,18 @@ import {
 } from "recharts";
 
 import { EmptyNote } from "@/components/section";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useCategoryOverrides } from "@/lib/category-overrides";
 import { formatMoney, formatCount } from "@/lib/format";
 import {
+  SPEND_CATEGORIES,
   buildSpendBreakdown,
+  categorizePaymentByRules,
+  categoryMerchantKey,
+  type CategoryMerchant,
   type CategorySlice,
+  type SpendCategoryId,
 } from "@/lib/spend-categories";
 import type { DecryptedLedgerRow } from "@/lib/types";
 import { useTheme } from "@/lib/use-theme";
@@ -69,10 +76,11 @@ type ViewMode = "categories" | "merchants";
 export function SpendChart({ rows, loading }: Props) {
   const { theme } = useTheme();
   const palette = PALETTE[theme];
+  const { map: overrides, setCategory, clearCategory } = useCategoryOverrides();
   const [mode, setMode] = useState<ViewMode>("categories");
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<SpendCategoryId | null>(null);
 
-  const breakdown = useMemo(() => buildSpendBreakdown(rows), [rows]);
+  const breakdown = useMemo(() => buildSpendBreakdown(rows, overrides), [rows, overrides]);
 
   const spendSlices = useMemo(
     () => breakdown.slices.filter((s) => s.kind === "spend"),
@@ -85,8 +93,11 @@ export function SpendChart({ rows, loading }: Props) {
   );
 
   const selected = useMemo(
-    () => spendSlices.find((s) => s.id === activeCategory) ?? null,
-    [spendSlices, activeCategory],
+    () =>
+      breakdown.slices.find((s) => s.id === activeCategory) ??
+      spendSlices.find((s) => s.id === activeCategory) ??
+      null,
+    [breakdown.slices, spendSlices, activeCategory],
   );
 
   const merchantData = useMemo<MerchantSlice[]>(() => {
@@ -136,6 +147,9 @@ export function SpendChart({ rows, loading }: Props) {
             {breakdown.incomeTotal > 0
               ? ` · $${formatMoney(breakdown.incomeTotal)} income`
               : ""}
+            {overrides.size > 0
+              ? ` · ${formatCount(overrides.size)} custom`
+              : ""}
           </p>
         </div>
 
@@ -173,7 +187,7 @@ export function SpendChart({ rows, loading }: Props) {
       </div>
 
       {mode === "categories" ? (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
           <CategoryList
             slices={spendSlices}
             palette={palette}
@@ -183,7 +197,19 @@ export function SpendChart({ rows, loading }: Props) {
           <CategoryDetail
             selected={selected}
             other={otherSlices}
-            emptyHint="Select a category to see which merchants make it up."
+            emptyHint="Select a category to see which merchants make it up — change a merchant’s category and the ledger remembers it on this device."
+            onOpenCategory={setActiveCategory}
+            onAssign={(merchantKey, categoryId) => {
+              const seed = seedCategoryForMerchant(rows, merchantKey);
+              if (seed === categoryId) clearCategory(merchantKey);
+              else setCategory(merchantKey, categoryId);
+              setActiveCategory(categoryId);
+            }}
+            onReset={(merchantKey) => {
+              clearCategory(merchantKey);
+              const seed = seedCategoryForMerchant(rows, merchantKey);
+              setActiveCategory(seed);
+            }}
           />
         </div>
       ) : (
@@ -191,6 +217,16 @@ export function SpendChart({ rows, loading }: Props) {
       )}
     </div>
   );
+}
+
+/** Best-effort seed category for a merchant key, used when clearing an override. */
+function seedCategoryForMerchant(
+  rows: DecryptedLedgerRow[],
+  merchantKey: string,
+): SpendCategoryId {
+  const row = rows.find((r) => categoryMerchantKey(r) === merchantKey);
+  if (!row) return "other";
+  return categorizePaymentByRules(row);
 }
 
 function CategoryList({
@@ -202,7 +238,7 @@ function CategoryList({
   slices: CategorySlice[];
   palette: (typeof PALETTE)["light"];
   activeId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: SpendCategoryId) => void;
 }) {
   if (slices.length === 0) {
     return (
@@ -265,10 +301,16 @@ function CategoryDetail({
   selected,
   other,
   emptyHint,
+  onOpenCategory,
+  onAssign,
+  onReset,
 }: {
   selected: CategorySlice | null;
   other: CategorySlice[];
   emptyHint: string;
+  onOpenCategory: (id: SpendCategoryId) => void;
+  onAssign: (merchantKey: string, categoryId: SpendCategoryId) => void;
+  onReset: (merchantKey: string) => void;
 }) {
   return (
     <div className="space-y-5 lg:border-l lg:border-border lg:pl-6">
@@ -280,23 +322,21 @@ function CategoryDetail({
               ${formatMoney(selected.total)}
             </p>
             <p className="mt-1 text-[12px] text-muted-foreground">
-              {Math.round(selected.share * 100)}% of spend · top merchants below
+              {selected.kind === "spend"
+                ? `${Math.round(selected.share * 100)}% of spend · `
+                : ""}
+              reassign merchants below to teach the ledger
             </p>
           </div>
           <ul className="divide-y divide-border border-y border-border">
             {selected.merchants.map((m) => (
-              <li
-                key={m.name}
-                className="flex items-baseline justify-between gap-3 py-2.5 text-[13px]"
-              >
-                <span className="min-w-0 truncate">{m.name}</span>
-                <span className="money shrink-0 text-muted-foreground">
-                  ${formatMoney(m.total)}
-                  <span className="ml-2 font-mono text-[10px] uppercase tracking-[0.08em]">
-                    ×{m.count}
-                  </span>
-                </span>
-              </li>
+              <MerchantCategoryRow
+                key={m.key}
+                merchant={m}
+                currentCategory={selected.id}
+                onAssign={onAssign}
+                onReset={onReset}
+              />
             ))}
           </ul>
         </div>
@@ -309,19 +349,166 @@ function CategoryDetail({
           <p className="eyebrow">Not counted as spend</p>
           <ul className="space-y-2">
             {other.map((slice) => (
-              <li
-                key={slice.id}
-                className="flex items-baseline justify-between gap-3 text-[13px]"
-              >
-                <span>
-                  {slice.label}
-                  <span className="ml-2 text-[11.5px] text-muted-foreground">{slice.hint}</span>
-                </span>
-                <span className="money text-muted-foreground">${formatMoney(slice.total)}</span>
+              <li key={slice.id}>
+                <button
+                  type="button"
+                  className="flex w-full items-baseline justify-between gap-3 text-left text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={() => onOpenCategory(slice.id)}
+                >
+                  <span>
+                    {slice.label}
+                    <span className="ml-2 text-[11.5px] opacity-80">{slice.hint}</span>
+                  </span>
+                  <span className="money">${formatMoney(slice.total)}</span>
+                </button>
               </li>
             ))}
           </ul>
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MerchantCategoryRow({
+  merchant,
+  currentCategory,
+  onAssign,
+  onReset,
+}: {
+  merchant: CategoryMerchant;
+  currentCategory: SpendCategoryId;
+  onAssign: (merchantKey: string, categoryId: SpendCategoryId) => void;
+  onReset: (merchantKey: string) => void;
+}) {
+  return (
+    <li className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate text-[13px] font-medium">{merchant.name}</span>
+          {merchant.overridden ? (
+            <Badge variant="ochre" className="shrink-0">
+              Custom
+            </Badge>
+          ) : null}
+        </div>
+        <p className="mt-0.5 money text-[12px] text-muted-foreground">
+          ${formatMoney(merchant.total)}
+          <span className="ml-2 font-mono text-[10px] uppercase tracking-[0.08em]">
+            ×{merchant.count}
+          </span>
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <CategoryPicker
+          merchantName={merchant.name}
+          value={currentCategory}
+          onChange={(id) => onAssign(merchant.key, id)}
+        />
+        {merchant.overridden ? (
+          <button
+            type="button"
+            className="link-underline shrink-0 text-[11px] text-muted-foreground"
+            onClick={() => onReset(merchant.key)}
+          >
+            Reset
+          </button>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+/** Custom menu — native select option lists always look like the OS default. */
+function CategoryPicker({
+  merchantName,
+  value,
+  onChange,
+}: {
+  merchantName: string;
+  value: SpendCategoryId;
+  onChange: (id: SpendCategoryId) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const current = SPEND_CATEGORIES.find((c) => c.id === value) ?? SPEND_CATEGORIES.at(-1)!;
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Category for ${merchantName}`}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "inline-flex h-8 min-w-[9.5rem] items-center justify-between gap-2 border border-border bg-background px-2.5 text-left transition-colors",
+          "hover:border-foreground/30 focus-visible:border-oxblood focus-visible:outline-none",
+          open && "border-oxblood",
+        )}
+      >
+        <span className="truncate font-mono text-[10.5px] uppercase tracking-[0.12em]">
+          {current.label}
+        </span>
+        <span
+          className={cn(
+            "font-mono text-[9px] text-muted-foreground transition-transform",
+            open && "rotate-180",
+          )}
+          aria-hidden
+        >
+          ▾
+        </span>
+      </button>
+
+      {open ? (
+        <ul
+          role="listbox"
+          aria-label="Spend categories"
+          className="panel absolute right-0 z-30 mt-1 max-h-64 w-[14rem] overflow-y-auto py-1"
+        >
+          {SPEND_CATEGORIES.map((cat) => {
+            const active = cat.id === value;
+            return (
+              <li key={cat.id} role="option" aria-selected={active}>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full flex-col gap-0.5 px-3 py-2 text-left transition-colors",
+                    active
+                      ? "bg-oxblood/10 text-foreground"
+                      : "text-foreground hover:bg-foreground/[0.04]",
+                  )}
+                  onClick={() => {
+                    onChange(cat.id);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="font-mono text-[10.5px] uppercase tracking-[0.12em]">
+                    {cat.label}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">{cat.hint}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       ) : null}
     </div>
   );
