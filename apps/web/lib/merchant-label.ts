@@ -44,7 +44,10 @@ const LEADING_BARE_DATE = new RegExp(
 const TRAILING_LOCALE = /\s+(?:aus|au|aud|nzd|nz|nzl|usa|usd|us|gbr|gbp|uk|sgp|sg)\s*$/gi;
 
 /** Store numbers: "WOOLWORTHS 1234 BONDI" → the 1234 says nothing. */
-const STORE_NUMBER = /\s+\d{3,6}(?=\s)/g;
+const STORE_NUMBER = /\s+\d{3,6}(?=\s|$)/g;
+
+/** Terminal codes tacked onto a name: "SPOTIFY P12345", "AMAZON PRIME AB12". */
+const TRAILING_CODE = /\s+[a-z]{1,3}\d{2,8}\s*$/i;
 
 /**
  * Opaque terminal refs like "P1A2B3C4". Requires a digit immediately followed
@@ -136,6 +139,8 @@ export function cleanMerchantLabel(raw: string): string {
   value = collapseWhitespace(value.replace(TRAILING_LOCALE, " "));
   value = collapseWhitespace(value.replace(TERMINAL_REF, " "));
   value = collapseWhitespace(value.replace(STORE_NUMBER, " "));
+  // Only once: a name that is nothing but a code should fall back to the raw text.
+  if (/\s/.test(value)) value = collapseWhitespace(value.replace(TRAILING_CODE, " "));
 
   value = dropSupportDomains(value);
   value = collapseWhitespace(value.replace(/\*/g, " "));

@@ -87,9 +87,58 @@ export function DateField({
 
   const selected = value ? isoToLocalDate(value) : undefined;
 
+  const panel = (
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-label="Choose a date"
+      style={{ top: position?.top ?? 0, left: position?.left ?? 0, width: PANEL_WIDTH }}
+      className="panel fixed z-50 p-1 shadow-lg"
+    >
+      <Calendar
+        mode="single"
+        required
+        selected={selected}
+        defaultMonth={selected ?? new Date()}
+        onSelect={(date) => {
+          if (!date) return;
+          onChange(dateToIsoLocal(date));
+          setOpen(false);
+        }}
+        className="w-full [--cell-size:2.15rem]"
+        classNames={{
+          root: "w-full",
+          months: "relative flex w-full flex-col",
+          month: "flex w-full flex-col gap-3",
+        }}
+      />
+
+      <div className="flex items-center justify-between gap-2 border-t border-border px-2 py-1.5">
+        <button
+          type="button"
+          className="link-underline font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground"
+          onClick={() => {
+            onChange(todayIso());
+            setOpen(false);
+          }}
+        >
+          Today
+        </button>
+        <button
+          type="button"
+          className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:text-foreground"
+          onClick={() => setOpen(false)}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+
   return (
-    <div ref={containerRef} className={cn("relative", className)}>
+    <div className={cn("relative", className)}>
       <button
+        ref={triggerRef}
         id={id}
         type="button"
         disabled={disabled}
@@ -109,51 +158,7 @@ export function DateField({
         <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </button>
 
-      {open ? (
-        <div
-          role="dialog"
-          aria-label="Choose a date"
-          className="panel absolute left-0 top-[calc(100%+6px)] z-50 w-[min(20rem,calc(100vw-2rem))] p-1 shadow-lg"
-        >
-          <Calendar
-            mode="single"
-            required
-            selected={selected}
-            defaultMonth={selected ?? new Date()}
-            onSelect={(date) => {
-              if (!date) return;
-              onChange(dateToIsoLocal(date));
-              setOpen(false);
-            }}
-            className="w-full [--cell-size:2.15rem]"
-            classNames={{
-              root: "w-full",
-              months: "relative flex w-full flex-col",
-              month: "flex w-full flex-col gap-3",
-            }}
-          />
-
-          <div className="flex items-center justify-between gap-2 border-t border-border px-2 py-1.5">
-            <button
-              type="button"
-              className="link-underline font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground"
-              onClick={() => {
-                onChange(todayIso());
-                setOpen(false);
-              }}
-            >
-              Today
-            </button>
-            <button
-              type="button"
-              className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:text-foreground"
-              onClick={() => setOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      ) : null}
+      {open && position ? createPortal(panel, document.body) : null}
     </div>
   );
 }

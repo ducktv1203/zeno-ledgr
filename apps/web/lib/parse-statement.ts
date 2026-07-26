@@ -172,8 +172,8 @@ export function normalizeStatementDate(raw: string): string | null {
 
   const slash = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(s);
   if (slash) {
-    let a = Number(slash[1]);
-    let b = Number(slash[2]);
+    const a = Number(slash[1]);
+    const b = Number(slash[2]);
     let y = Number(slash[3]);
     if (y < 100) y += y >= 70 ? 1900 : 2000;
 
