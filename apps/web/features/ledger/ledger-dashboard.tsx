@@ -181,7 +181,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         className="rise rise-4"
         eyebrow="Analysis"
         title="Where the money goes"
-        description="Spend totalled per merchant across the rows currently in view."
+        description="Outflow grouped into groceries, food, transport, entertainment and the rest — pick a category to see the merchants inside it, or switch to the merchant ranking."
       >
         <SpendChart rows={visibleRows} loading={ledger.loadingRows} />
       </Section>

@@ -48,7 +48,11 @@ const HEADERISH_MERCHANT =
   /^(date|description|debit|credit|balance|amount|particulars|details|narrative|merchant|transactions?|statement|cheques?\s+written|account\s+fee)(\s+\w+){0,6}$/i;
 
 const BOILERPLATE =
-  /\b(afca|passcode|complaints?|customer relations|commbank|asic|dispute resolution|reply paid|gpo box|we try to get things right|keeping your passcodes|important safety notice|australian financial)\b/i;
+  /\b(afca|passcode|complaints?|customer relations|dispute resolution|reply paid|gpo box|we try to get things right|keeping your passcodes|important safety notice|australian financial)\b/i;
+
+/** Whole-line page chrome — do not use bare "commbank" (kills real txn lines). */
+const HEADER_ONLY =
+  /^(commonwealth\s+bank|commbank|statement\s+of\s+account|transaction\s+account statement)\b/i;
 
 const MONTH_MAP: Record<string, number> = {
   jan: 1,
@@ -83,15 +87,16 @@ const MONTH_NAMES = Object.keys(MONTH_MAP).join("|");
 const MONEY_TOKEN =
   "(-?\\$?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{2})|\\(\\$?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{2})\\))\\s*(?:CR|DR|CREDIT|DEBIT)?";
 
-const ALL_AMOUNTS = new RegExp(MONEY_TOKEN, "gi");
+/** Day/month only — month must be 01–12 so amounts like 10.49 never match. */
+const DM_NO_YEAR = "(?:0?[1-9]|[12]\\d|3[01])[/.-](?:0?[1-9]|1[0-2])";
 
 const DATE_AT_START = new RegExp(
-  `^(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?\\s+\\d{2,4}|(?:${MONTH_NAMES})\\.?\\s+\\d{1,2},?\\s+\\d{2,4})\\b`,
+  `^(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?\\s+\\d{2,4}|(?:${MONTH_NAMES})\\.?\\s+\\d{1,2},?\\s+\\d{2,4}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?|${DM_NO_YEAR})\\b`,
   "i",
 );
 
 const DATE_ANYWHERE = new RegExp(
-  `(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?\\s+\\d{2,4}|(?:${MONTH_NAMES})\\.?\\s+\\d{1,2},?\\s+\\d{2,4})`,
+  `(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?\\s+\\d{2,4}|(?:${MONTH_NAMES})\\.?\\s+\\d{1,2},?\\s+\\d{2,4}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?)`,
   "i",
 );
 
@@ -169,8 +174,13 @@ function ymd(y: number, m: number, d: number): string | null {
 
 /**
  * Accepts ISO, AU slash dates, and month-name dates (01 Jul 2026 / Jul 1, 2026).
+ * CommBank body rows sometimes omit the year ("16 Jan") — pass fallbackYear
+ * from the statement period or the previous transaction.
  */
-export function normalizeStatementDate(raw: string): string | null {
+export function normalizeStatementDate(
+  raw: string,
+  fallbackYear?: number | null,
+): string | null {
   const s = raw.trim().replace(/\s+/g, " ");
   if (!s) return null;
 
@@ -199,12 +209,26 @@ export function normalizeStatementDate(raw: string): string | null {
     return ymd(y, month, day);
   }
 
+  const slashNoYear = /^(\d{1,2})[/.-](\d{1,2})$/.exec(s);
+  if (slashNoYear && fallbackYear) {
+    const a = Number(slashNoYear[1]);
+    const b = Number(slashNoYear[2]);
+    // AU statements: day/month
+    return ymd(fallbackYear, b, a);
+  }
+
   const dmyName = new RegExp(`^(\\d{1,2})\\s+(${MONTH_NAMES})\\.?\\s+(\\d{2,4})$`, "i").exec(s);
   if (dmyName) {
     let y = Number(dmyName[3]);
     if (y < 100) y += y >= 70 ? 1900 : 2000;
     const month = MONTH_MAP[dmyName[2]!.toLowerCase()]!;
     return ymd(y, month, Number(dmyName[1]));
+  }
+
+  const dmyNoYear = new RegExp(`^(\\d{1,2})\\s+(${MONTH_NAMES})\\.?$`, "i").exec(s);
+  if (dmyNoYear && fallbackYear) {
+    const month = MONTH_MAP[dmyNoYear[2]!.toLowerCase()]!;
+    return ymd(fallbackYear, month, Number(dmyNoYear[1]));
   }
 
   const mdyName = new RegExp(`^(${MONTH_NAMES})\\.?\\s+(\\d{1,2}),?\\s+(\\d{2,4})$`, "i").exec(s);
@@ -218,6 +242,40 @@ export function normalizeStatementDate(raw: string): string | null {
   const t = Date.parse(s);
   if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
   return null;
+}
+
+function inferStatementYear(lines: string[]): number | null {
+  for (const line of lines.slice(0, 40)) {
+    const period =
+      /statement\s+period[^0-9]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}).*?(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/i.exec(
+        line,
+      ) ??
+      /(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{2,4}).*?(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{2,4})/i.exec(
+        line,
+      );
+    if (period) {
+      const end = normalizeStatementDate(period[2]!);
+      if (end) return Number(end.slice(0, 4));
+    }
+  }
+  return null;
+}
+
+function isMoneyOnlyLine(line: string): boolean {
+  const moneyHits = [...line.matchAll(new RegExp(MONEY_TOKEN, "gi"))];
+  if (moneyHits.length === 0) return false;
+  return line.replace(new RegExp(MONEY_TOKEN, "gi"), "").replace(/[$,\s]/g, "").length === 0;
+}
+
+function looksTransactional(line: string): boolean {
+  // Headers like "Statement Period 01 Jan 2026 – 31 Jan 2026" contain dates
+  // but must never be treated as payments (they steal the next amount line).
+  if (SKIP_LINE.test(line) || HEADER_ONLY.test(line) || BOILERPLATE.test(line)) {
+    return isMoneyOnlyLine(line);
+  }
+  if (DATE_AT_START.test(line) || DATE_ANYWHERE.test(line)) return true;
+  if (isMoneyOnlyLine(line)) return true;
+  return false;
 }
 
 function resolveAmount(
@@ -247,25 +305,47 @@ function cleanOcrLine(line: string): string {
     .trim();
 }
 
+/**
+ * Pull the transaction amount out of free text that may also include a
+ * running balance, and on CommBank-style tables an empty debit/credit column
+ * as 0.00:
+ *   "… 10.49 0.00 1,523.67"  → debit 10.49 (not 0.00, not balance)
+ *   "… 0.00 2,450.00 5,000" → credit 2,450
+ *   "… 10.49 1,523.67"       → 10.49 (amount + balance)
+ */
 function extractAmountFromRest(rest: string): { amount: string | null; merchant: string } {
-  const moneyHits = [...rest.matchAll(ALL_AMOUNTS)];
-  if (moneyHits.length >= 2) {
-    const txnHit = moneyHits[moneyHits.length - 2]!;
-    const n = parseAmountCell(txnHit[1] ?? txnHit[0]!);
-    return {
-      amount: n !== null ? formatAbsAmount(n) : null,
-      merchant: rest.slice(0, txnHit.index).trim(),
-    };
+  const moneyHits = [...rest.matchAll(new RegExp(MONEY_TOKEN, "gi"))];
+  if (moneyHits.length === 0) {
+    return { amount: null, merchant: rest.trim() };
   }
-  if (moneyHits.length === 1) {
-    const hit = moneyHits[0]!;
-    const n = parseAmountCell(hit[1] ?? hit[0]!);
-    return {
-      amount: n !== null ? formatAbsAmount(n) : null,
-      merchant: rest.slice(0, hit.index).trim(),
-    };
+
+  const parsed = moneyHits.map((hit) => ({
+    hit,
+    value: parseAmountCell(hit[1] ?? hit[0]!),
+  }));
+
+  let chosen: (typeof parsed)[number] | undefined;
+
+  if (parsed.length >= 3) {
+    // Debit | Credit | Balance — ignore balance; take the non-zero movement.
+    chosen = parsed.slice(0, -1).find((p) => p.value !== null && p.value !== 0);
+  } else if (parsed.length === 2) {
+    // Amount | Balance (or 0.00 | Credit). Prefer the first non-zero.
+    chosen =
+      parsed.find((p) => p.value !== null && p.value !== 0) ?? parsed[0];
+  } else {
+    chosen = parsed[0];
   }
-  return { amount: null, merchant: rest.trim() };
+
+  if (!chosen || chosen.value === null || chosen.value === 0) {
+    return { amount: null, merchant: rest.slice(0, moneyHits[0]!.index).trim() };
+  }
+
+  return {
+    amount: formatAbsAmount(chosen.value),
+    // Everything from the first money token onward is columns, not merchant.
+    merchant: rest.slice(0, moneyHits[0]!.index).trim(),
+  };
 }
 
 export function isPlausiblePayment(merchantRaw: string, amount: string, date: string): boolean {
@@ -275,7 +355,11 @@ export function isPlausiblePayment(merchantRaw: string, amount: string, date: st
   if (/^value\s+date\b/i.test(merchant) && !/\byoutube|google|netflix|spotify|amaysim\b/i.test(merchant)) {
     return false;
   }
-  if (HEADERISH_MERCHANT.test(merchant) || SKIP_LINE.test(merchant) || BOILERPLATE.test(merchant)) {
+  if (HEADERISH_MERCHANT.test(merchant) || SKIP_LINE.test(merchant)) {
+    return false;
+  }
+  // Legal footers only — do not reject real merchants that mention a bank.
+  if (BOILERPLATE.test(merchant) && merchant.length < 48) {
     return false;
   }
   if (/\b(cheques?\s+written|account\s+fee|opening|closing)\b/i.test(merchant)) return false;
@@ -306,6 +390,9 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
   const rows: ParsedStatementRow[] = [];
   const seen = new Set<string>();
   let skipped = 0;
+  let fallbackYear = inferStatementYear(lines);
+  /** Amounts that pdf.js emitted above their date row (common on CommBank). */
+  let orphanAmount: string | null = null;
 
   let pending: {
     line: number;
@@ -350,9 +437,13 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
 
   for (let i = 0; i < lines.length; i++) {
     const rawLine = cleanOcrLine(lines[i]!);
-    if (!rawLine || SKIP_LINE.test(rawLine) || BOILERPLATE.test(rawLine)) continue;
-    // Hard stop on long legal/footer paragraphs
-    if (rawLine.length > 160) continue;
+    if (!rawLine) continue;
+
+    const transactional = looksTransactional(rawLine);
+    if (HEADER_ONLY.test(rawLine) && rawLine.length < 80 && !transactional) continue;
+    // Footers / legal — but never drop a line that still looks like a payment.
+    if ((SKIP_LINE.test(rawLine) || BOILERPLATE.test(rawLine)) && !transactional) continue;
+    if (rawLine.length > 220 && !transactional) continue;
 
     // Settlement "Value Date …" lines belong to the open purchase — never a new row.
     if (VALUE_DATE_LINE.test(rawLine)) {
@@ -365,20 +456,30 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
       continue;
     }
 
+    // Debit/Credit/Balance emitted on their own line before the date row.
+    if (isMoneyOnlyLine(rawLine)) {
+      const { amount } = extractAmountFromRest(rawLine);
+      if (amount) {
+        if (pending && !pending.amount) pending.amount = amount;
+        else orphanAmount = amount;
+      }
+      continue;
+    }
+
     let dateMatch = DATE_AT_START.exec(rawLine);
     let restAfterDate = "";
 
     if (dateMatch) {
       restAfterDate = rawLine.slice(dateMatch[0].length).trim();
-    } else if (!VALUE_DATE_LINE.test(rawLine)) {
+    } else if (!SKIP_LINE.test(rawLine) && !HEADER_ONLY.test(rawLine)) {
       // Only accept mid-line dates on short transaction-like lines (not footers
-      // and never "Value Date 15/01/2026", which is not a new purchase).
+      // / statement-period headers, and never "Value Date …").
       const mid = DATE_ANYWHERE.exec(rawLine);
       if (
         mid &&
         mid.index !== undefined &&
         mid.index <= 24 &&
-        rawLine.length <= 120 &&
+        rawLine.length <= 140 &&
         !BOILERPLATE.test(rawLine)
       ) {
         dateMatch = mid;
@@ -390,35 +491,37 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
 
     if (dateMatch) {
       flush();
-      const date = normalizeStatementDate(dateMatch[1]!);
+      const date = normalizeStatementDate(dateMatch[1]!, fallbackYear);
       if (!date) {
         skipped += 1;
         continue;
       }
+      fallbackYear = Number(date.slice(0, 4));
 
       const { amount, merchant } = extractAmountFromRest(restAfterDate);
       pending = {
         line: i + 1,
         date,
         merchantParts: merchant ? [merchant] : [],
-        amount,
+        amount: amount ?? orphanAmount,
       };
+      orphanAmount = null;
       continue;
     }
 
     if (pending) {
       // Never glue footer/legal text onto a transaction description.
-      if (BOILERPLATE.test(rawLine) || SKIP_LINE.test(rawLine) || rawLine.length > 100) {
+      if ((BOILERPLATE.test(rawLine) || SKIP_LINE.test(rawLine)) && !transactional) {
+        flush();
+        continue;
+      }
+      if (rawLine.length > 140 && !transactional) {
         flush();
         continue;
       }
 
-      // "10.49 1,523.67" — debit then running balance. Trailing-only would
-      // wrongly take the balance (that is how YouTube became $53.47).
-      const moneyHits = [...rawLine.matchAll(ALL_AMOUNTS)];
-      const moneyOnlyLine =
-        moneyHits.length >= 1 &&
-        rawLine.replace(ALL_AMOUNTS, "").replace(/[$,\s]/g, "").length === 0;
+      const moneyHits = [...rawLine.matchAll(new RegExp(MONEY_TOKEN, "gi"))];
+      const moneyOnly = isMoneyOnlyLine(rawLine);
 
       if (moneyHits.length >= 1 && !pending.amount) {
         const { amount, merchant } = extractAmountFromRest(rawLine);
@@ -427,17 +530,12 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
           merchant &&
           !VALUE_DATE_LINE.test(merchant) &&
           merchant.length <= 80 &&
-          !moneyOnlyLine
+          !moneyOnly
         ) {
           const soFar = pending.merchantParts.join(" ").length;
           if (soFar < 120) pending.merchantParts.push(merchant.slice(0, 80));
         }
-      } else if (
-        !moneyOnlyLine &&
-        !/^\d+(\.\d+)?$/.test(rawLine) &&
-        !DATE_AT_START.test(rawLine) &&
-        !VALUE_DATE_LINE.test(rawLine)
-      ) {
+      } else if (!moneyOnly && !DATE_AT_START.test(rawLine) && !VALUE_DATE_LINE.test(rawLine)) {
         const soFar = pending.merchantParts.join(" ").length;
         if (soFar < 120) pending.merchantParts.push(rawLine.slice(0, 80));
       }
@@ -589,6 +687,12 @@ export async function parseStatementFile(
       `Read ${pageCount} page${pageCount === 1 ? "" : "s"}, ${lines.length} text lines → ${parsed.rows.length} payment${parsed.rows.length === 1 ? "" : "s"}.`,
       ...parsed.warnings,
     ];
+    if (pageCount >= 5 && parsed.rows.length > 0 && parsed.rows.length <= 2 && lines.length > 80) {
+      parsed.warnings = [
+        "Only a couple of payments came through from a long statement — hard-refresh the page (Ctrl+Shift+R) and re-upload so the latest parser loads.",
+        ...parsed.warnings,
+      ];
+    }
 
     if (usedOcr) {
       parsed.usedOcr = true;

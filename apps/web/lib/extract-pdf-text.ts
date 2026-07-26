@@ -45,20 +45,38 @@ function pageLooksTransactional(lines: string[]): boolean {
   return dated >= 1 && withMoney >= 1;
 }
 
+/**
+ * CommBank (and most bank PDFs) put Debit/Credit/Balance on a slightly
+ * different baseline than Date + Description. Rounding each Y independently
+ * then splits "16 Jan 2026 Woolworths" from "54.20 0.00 1,203.11", and the
+ * amount line can even sort *above* the date — which drops almost every
+ * purchase and leaves only single-line credits (wages).
+ */
+const Y_LINE_TOLERANCE = 3.5;
+
 function chunksToLines(chunks: TextChunk[]): string[] {
-  const byY = new Map<number, TextChunk[]>();
-  for (const chunk of chunks) {
-    const key = Math.round(chunk.y);
-    const list = byY.get(key) ?? [];
-    list.push(chunk);
-    byY.set(key, list);
+  if (chunks.length === 0) return [];
+
+  const sorted = [...chunks].sort((a, b) => b.y - a.y || a.x - b.x);
+  const clusters: TextChunk[][] = [];
+  let current: TextChunk[] = [];
+  let anchorY = sorted[0]!.y;
+
+  for (const chunk of sorted) {
+    if (current.length === 0 || Math.abs(chunk.y - anchorY) <= Y_LINE_TOLERANCE) {
+      current.push(chunk);
+      continue;
+    }
+    clusters.push(current);
+    current = [chunk];
+    anchorY = chunk.y;
   }
+  if (current.length > 0) clusters.push(current);
 
   const lines: string[] = [];
-  const sortedYs = [...byY.keys()].sort((a, b) => b - a);
-  for (const y of sortedYs) {
-    const row = (byY.get(y) ?? []).sort((a, b) => a.x - b.x);
+  for (const row of clusters) {
     const line = row
+      .sort((a, b) => a.x - b.x)
       .map((c) => c.str)
       .join(" ")
       .replace(/\s+/g, " ")
