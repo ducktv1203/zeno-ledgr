@@ -123,6 +123,7 @@ const SUBSCRIPTION_BRANDS: { id: string; name: string; match: RegExp }[] = [
   { id: "optus", name: "Optus", match: /\boptus\b/i },
   { id: "telstra", name: "Telstra", match: /\btelstra\b/i },
   { id: "vodafone", name: "Vodafone", match: /vodafone/i },
+  // PayPal descriptors often read "PAYPAL *AMAYSIM" when mum's SIM is on PayPal.
   { id: "amaysim", name: "Amaysim", match: /amaysim/i },
   { id: "belong", name: "Belong", match: /\bbelong\b/i },
   { id: "aussie-broadband", name: "Aussie Broadband", match: /aussie\s*broadband/i },
@@ -293,6 +294,35 @@ function amountsClose(a: number, b: number, relative: number, absolute: number):
   return diff <= absolute || diff / Math.max(a, b) <= relative;
 }
 
+type Charge = { amount: number; date: string; raw: string };
+
+/**
+ * Prepaid telcos (Amaysim) and shared family plans dump many different amounts
+ * under one merchant name: the real 28-day plan, a $1 card-auth hold, a small
+ * top-up, and sometimes a second plan for a visiting parent. Clustering by
+ * amount keeps those from collapsing into one nonsense "subscription" of $1.
+ */
+function clusterByAmount(charges: Charge[]): Charge[][] {
+  const clusters: Charge[][] = [];
+  const ordered = [...charges].sort((a, b) => a.amount - b.amount);
+
+  for (const charge of ordered) {
+    const hit = clusters.find((cluster) => {
+      const centre = median(cluster.map((c) => c.amount));
+      return amountsClose(charge.amount, centre, 0.08, 0.51);
+    });
+    if (hit) hit.push(charge);
+    else clusters.push([charge]);
+  }
+  return clusters;
+}
+
+/** Amaysim (and friends) put a ~$1 pre-auth on the card — not a plan. */
+function isCardAuthHold(cluster: Charge[]): boolean {
+  const centre = median(cluster.map((c) => c.amount));
+  return centre > 0 && centre <= 1.05;
+}
+
 function daysBetween(fromIso: string, toIso: string): number {
   return Math.round((dayMs(toIso) - dayMs(fromIso)) / 86_400_000);
 }
@@ -397,9 +427,7 @@ export function detectSubscriptions(
     key: string;
     service: string;
     knownBrand: boolean;
-    amounts: number[];
-    dates: string[];
-    raw: Set<string>;
+    charges: Charge[];
   };
 
   const asOf = options.asOf ?? dataHorizon(rows);
@@ -415,18 +443,14 @@ export function detectSubscriptions(
     const brand = resolveBrand(row.merchantRaw, row.merchantDisplay);
     const service = brand?.name ?? row.merchantDisplay ?? row.merchantRaw;
     const existing = buckets.get(key);
-    if (existing) {
-      existing.amounts.push(amount);
-      existing.dates.push(row.date);
-      existing.raw.add(row.merchantRaw);
-    } else {
+    const charge = { amount, date: row.date, raw: row.merchantRaw };
+    if (existing) existing.charges.push(charge);
+    else {
       buckets.set(key, {
         key,
         service,
         knownBrand: Boolean(brand),
-        amounts: [amount],
-        dates: [row.date],
-        raw: new Set([row.merchantRaw]),
+        charges: [charge],
       });
     }
   }
@@ -434,108 +458,112 @@ export function detectSubscriptions(
   const out: DetectedSubscription[] = [];
 
   for (const bucket of buckets.values()) {
-    const chargeCount = bucket.amounts.length;
-    const uniqueDates = [...new Set(bucket.dates)].sort();
-    const typicalAmount = median(bucket.amounts);
-
-    // Real plans bill the same figure to the cent; brands get room for a price rise.
-    const amountsTight = bucket.amounts.every((a) => amountsClose(a, typicalAmount, 0.03, 0.25));
-    const amountsLoose = bucket.amounts.every((a) => amountsClose(a, typicalAmount, 0.12, 1));
-
-    const gaps: number[] = [];
-    for (let i = 1; i < uniqueDates.length; i++) {
-      const gap = daysBetween(uniqueDates[i - 1]!, uniqueDates[i]!);
-      if (gap > 0) gaps.push(gap);
-    }
-    const medGap = gaps.length ? median(gaps) : 0;
-    const cadence = gaps.length ? cadenceFromGap(medGap) : "unknown";
-
-    const gapsRegular =
-      gaps.length > 0 && gaps.every((g) => Math.abs(g - medGap) <= Math.max(3, medGap * 0.2));
-    const needsBillingDay =
-      cadence === "monthly" || cadence === "quarterly" || cadence === "yearly";
-    const aligned = !needsBillingDay || billingDayAligned(uniqueDates);
-
     /*
-     * Worth asking about at all?
-     *
-     * A name we recognise is evidence in itself: nobody buys a single month of
-     * YouTube by accident. One charge is enough to raise the question, and a
-     * price rise between charges must not delete it either — both used to drop
-     * real subscriptions on the floor with nothing shown to the user.
-     *
-     * An unknown merchant has to earn it: either two charges for the same
-     * amount on a recognisable cycle, or three on an even cycle, which is
-     * structural enough to survive a change of price.
+     * One merchant name ≠ one plan. Split by amount first so a $35 Amaysim
+     * renewal is not averaged with a $1 card check and a second SIM for mum.
      */
-    const isCandidate = bucket.knownBrand
-      ? uniqueDates.length >= 1
-      : cadence !== "unknown" &&
-        ((uniqueDates.length >= 2 && amountsTight) ||
-          (uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && amountsLoose));
+    const clusters = clusterByAmount(bucket.charges).filter((cluster) => !isCardAuthHold(cluster));
 
-    if (!isCandidate) continue;
+    for (const cluster of clusters) {
+      const amounts = cluster.map((c) => c.amount);
+      const uniqueDates = [...new Set(cluster.map((c) => c.date))].sort();
+      const typicalAmount = median(amounts);
+      const chargeCount = cluster.length;
 
-    const strongEvidence = bucket.knownBrand
-      ? uniqueDates.length >= 2 && amountsLoose
-      : uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && aligned && amountsTight;
+      const amountsTight = amounts.every((a) => amountsClose(a, typicalAmount, 0.03, 0.25));
+      const amountsLoose = amounts.every((a) => amountsClose(a, typicalAmount, 0.12, 1));
 
-    let confidence: DetectedSubscription["confidence"] = "low";
-    if (uniqueDates.length >= 3 && gapsRegular && aligned) confidence = "high";
-    else if (uniqueDates.length >= 2 && (bucket.knownBrand || gapsRegular)) confidence = "medium";
+      const gaps: number[] = [];
+      for (let i = 1; i < uniqueDates.length; i++) {
+        const gap = daysBetween(uniqueDates[i - 1]!, uniqueDates[i]!);
+        if (gap > 0) gaps.push(gap);
+      }
+      const medGap = gaps.length ? median(gaps) : 0;
+      const cadence = gaps.length ? cadenceFromGap(medGap) : "unknown";
 
-    const resolvedCadence = cadence === "unknown" && bucket.knownBrand ? "monthly" : cadence;
-    const step =
-      gapDaysForCadence(resolvedCadence) ?? (medGap > 0 ? Math.round(medGap) : null);
-    const last = uniqueDates[uniqueDates.length - 1]!;
+      const gapsRegular =
+        gaps.length > 0 && gaps.every((g) => Math.abs(g - medGap) <= Math.max(3, medGap * 0.2));
+      const needsBillingDay =
+        cadence === "monthly" || cadence === "quarterly" || cadence === "yearly";
+      const aligned = !needsBillingDay || billingDayAligned(uniqueDates);
 
-    const daysSinceLastCharge = Math.max(0, daysBetween(last, asOf));
-    const cyclesMissed = step ? Math.max(0, Math.floor(daysSinceLastCharge / step) - 1) : 0;
-    const lapsed =
-      step !== null && daysSinceLastCharge > step * LAPSE_CYCLES + LAPSE_GRACE_DAYS;
+      /*
+       * A name we recognise is evidence in itself — one charge raises a
+       * question, unless it is a tiny one-off crumb ($2.90 top-up, leftover
+       * auth) that has never repeated. Unknown merchants need a repeated,
+       * steady amount on a recognisable cycle.
+       */
+      const isCandidate = bucket.knownBrand
+        ? uniqueDates.length >= 2 || (uniqueDates.length >= 1 && typicalAmount >= 5)
+        : cadence !== "unknown" &&
+          ((uniqueDates.length >= 2 && amountsTight) ||
+            (uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && amountsLoose));
 
-    // Staleness first: whether it stopped matters more than how it billed.
-    const enoughCharges = uniqueDates.length >= (bucket.knownBrand ? 2 : MIN_GENERIC_CHARGES);
-    let reviewReason: ReviewReason | null = null;
-    if (lapsed) reviewReason = "stopped";
-    else if (!strongEvidence) {
-      if (!enoughCharges) reviewReason = "sparse";
-      else if (!amountsTight) reviewReason = "amount";
-      else reviewReason = "irregular";
+      if (!isCandidate) continue;
+
+      const strongEvidence = bucket.knownBrand
+        ? uniqueDates.length >= 2 && amountsLoose
+        : uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && aligned && amountsTight;
+
+      let confidence: DetectedSubscription["confidence"] = "low";
+      if (uniqueDates.length >= 3 && gapsRegular && aligned) confidence = "high";
+      else if (uniqueDates.length >= 2 && (bucket.knownBrand || gapsRegular)) confidence = "medium";
+
+      const resolvedCadence = cadence === "unknown" && bucket.knownBrand ? "monthly" : cadence;
+      // Prefer the observed gap (Amaysim renews every 28 days, not 30).
+      const step =
+        medGap > 0 && cadence !== "unknown"
+          ? Math.round(medGap)
+          : gapDaysForCadence(resolvedCadence) ?? (bucket.knownBrand ? 30 : null);
+      const last = uniqueDates[uniqueDates.length - 1]!;
+
+      const daysSinceLastCharge = Math.max(0, daysBetween(last, asOf));
+      const cyclesMissed = step ? Math.max(0, Math.floor(daysSinceLastCharge / step) - 1) : 0;
+      const lapsed =
+        step !== null && daysSinceLastCharge > step * LAPSE_CYCLES + LAPSE_GRACE_DAYS;
+
+      const enoughCharges = uniqueDates.length >= (bucket.knownBrand ? 2 : MIN_GENERIC_CHARGES);
+      let reviewReason: ReviewReason | null = null;
+      if (lapsed) reviewReason = "stopped";
+      else if (!strongEvidence) {
+        if (!enoughCharges) reviewReason = "sparse";
+        else if (!amountsTight) reviewReason = "amount";
+        else reviewReason = "irregular";
+      }
+
+      let nextExpectedDate: string | null = null;
+      let currentPeriodStart: string | null = null;
+      let currentPeriodEnd: string | null = null;
+      if (step && !reviewReason) {
+        const rolled = rollForwardExpected(last, step);
+        nextExpectedDate = rolled.nextDue;
+        currentPeriodStart = rolled.periodStart;
+        currentPeriodEnd = rolled.periodEnd;
+      }
+
+      const amountKey = typicalAmount.toFixed(2);
+      out.push({
+        // Amount in the key so two Amaysim SIMs (yours + mum's) stay distinct.
+        key: `${bucket.key}#${amountKey}`,
+        service: bucket.service,
+        amount: amountKey,
+        cadence: resolvedCadence,
+        confidence,
+        status: reviewReason ? "review" : "active",
+        reviewReason,
+        medianGapDays: medGap > 0 ? Math.round(medGap) : null,
+        cyclesMissed,
+        daysSinceLastCharge,
+        chargeCount,
+        firstPurchaseDate: uniqueDates[0]!,
+        lastChargeDate: last,
+        nextExpectedDate,
+        currentPeriodStart,
+        currentPeriodEnd,
+        stepDays: step,
+        rawMerchants: [...new Set(cluster.map((c) => c.raw))],
+      });
     }
-
-    // Only the calendar-ready tier gets a projected due date. Anything under
-    // review would otherwise put a guess on a day of the month.
-    let nextExpectedDate: string | null = null;
-    let currentPeriodStart: string | null = null;
-    let currentPeriodEnd: string | null = null;
-    if (step && !reviewReason) {
-      const rolled = rollForwardExpected(last, step);
-      nextExpectedDate = rolled.nextDue;
-      currentPeriodStart = rolled.periodStart;
-      currentPeriodEnd = rolled.periodEnd;
-    }
-
-    out.push({
-      key: bucket.key,
-      service: bucket.service,
-      amount: typicalAmount.toFixed(2),
-      cadence: resolvedCadence,
-      confidence,
-      status: reviewReason ? "review" : "active",
-      reviewReason,
-      medianGapDays: medGap > 0 ? Math.round(medGap) : null,
-      cyclesMissed,
-      daysSinceLastCharge,
-      chargeCount,
-      firstPurchaseDate: uniqueDates[0]!,
-      lastChargeDate: last,
-      nextExpectedDate,
-      currentPeriodStart,
-      currentPeriodEnd,
-      stepDays: step,
-      rawMerchants: [...bucket.raw],
-    });
   }
 
   return out.sort((a, b) => {
@@ -546,13 +574,25 @@ export function detectSubscriptions(
   });
 }
 
+/** Merchant bucket without the `#amount` cluster suffix. */
+export function subscriptionBaseKey(key: string): string {
+  const hash = key.indexOf("#");
+  return hash === -1 ? key : key.slice(0, hash);
+}
+
 /** All ledger charges that belong to a detected subscription. */
 export function rowsForSubscription(
   sub: DetectedSubscription,
   rows: DecryptedLedgerRow[],
 ): DecryptedLedgerRow[] {
+  const base = subscriptionBaseKey(sub.key);
+  const target = parseAmount(sub.amount);
   return rows
-    .filter((row) => subscriptionKeyForRow(row) === sub.key)
+    .filter((row) => {
+      if (subscriptionKeyForRow(row) !== base) return false;
+      // Keep charge history scoped to this amount cluster (your plan vs mum's).
+      return amountsClose(parseAmount(row.amount), target, 0.08, 0.51);
+    })
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 

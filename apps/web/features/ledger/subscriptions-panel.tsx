@@ -22,6 +22,7 @@ import {
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
 import { formatDate, formatMoney } from "@/lib/format";
+import { cleanMerchantLabel } from "@/lib/merchant-label";
 import { useSubscriptionOverrides } from "@/lib/subscription-overrides";
 import type { DecryptedLedgerRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -355,6 +356,17 @@ function GroupDisclosure({
   );
 }
 
+/** Bank scaffolding under the friendly name — never the raw "Value Date … Card xx". */
+function BankDescriptor({ raw, display }: { raw: string; display: string }) {
+  const cleaned = cleanMerchantLabel(raw);
+  if (!cleaned || cleaned.toLowerCase() === display.toLowerCase()) return null;
+  return (
+    <div className="truncate font-mono text-[11px] text-muted-foreground" title={raw}>
+      {cleaned}
+    </div>
+  );
+}
+
 function ChargeHistory({
   subscription,
   charges,
@@ -401,9 +413,7 @@ function ChargeHistory({
             <TableRow key={row.id}>
               <TableCell className="max-w-[340px]">
                 <div className="font-medium">{row.merchantDisplay}</div>
-                <div className="truncate font-mono text-[11px] text-muted-foreground">
-                  {row.merchantRaw}
-                </div>
+                <BankDescriptor raw={row.merchantRaw} display={row.merchantDisplay} />
               </TableCell>
               <TableCell className="money text-right">${formatMoney(row.amount)}</TableCell>
               <TableCell className="money text-right text-muted-foreground">

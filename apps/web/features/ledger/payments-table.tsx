@@ -31,6 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatCount, formatDate, formatMoney } from "@/lib/format";
+import { cleanMerchantLabel } from "@/lib/merchant-label";
 import {
   usePreferences,
   type PaymentsPageSize as PageSize,
@@ -516,12 +517,8 @@ export function PaymentsTable({ rows, loading, onDelete }: Props) {
                   <div className={cn("truncate font-medium", dense && "text-[12.5px]")}>
                     {row.merchantDisplay}
                   </div>
-                  {preferences.showRawDescriptors &&
-                  !dense &&
-                  row.merchantRaw !== row.merchantDisplay ? (
-                    <div className="truncate font-mono text-[11px] text-muted-foreground">
-                      {row.merchantRaw}
-                    </div>
+                  {preferences.showRawDescriptors && !dense ? (
+                    <CleanedBankLine raw={row.merchantRaw} display={row.merchantDisplay} />
                   ) : null}
                 </TableCell>
                 <TableCell
@@ -584,6 +581,16 @@ export function PaymentsTable({ rows, loading, onDelete }: Props) {
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function CleanedBankLine({ raw, display }: { raw: string; display: string }) {
+  const cleaned = cleanMerchantLabel(raw);
+  if (!cleaned || cleaned.toLowerCase() === display.toLowerCase()) return null;
+  return (
+    <div className="truncate font-mono text-[11px] text-muted-foreground" title={raw}>
+      {cleaned}
     </div>
   );
 }

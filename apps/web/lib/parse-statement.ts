@@ -83,7 +83,6 @@ const MONTH_NAMES = Object.keys(MONTH_MAP).join("|");
 const MONEY_TOKEN =
   "(-?\\$?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{2})|\\(\\$?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{2})\\))\\s*(?:CR|DR|CREDIT|DEBIT)?";
 
-const TRAILING_AMOUNT = new RegExp(`${MONEY_TOKEN}\\s*$`, "i");
 const ALL_AMOUNTS = new RegExp(MONEY_TOKEN, "gi");
 
 const DATE_AT_START = new RegExp(
@@ -95,6 +94,14 @@ const DATE_ANYWHERE = new RegExp(
   `(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?\\s+\\d{2,4}|(?:${MONTH_NAMES})\\.?\\s+\\d{1,2},?\\s+\\d{2,4})`,
   "i",
 );
+
+/**
+ * CommBank wraps "Value Date 15/01/2026" onto its own line under a purchase.
+ * That date is settlement metadata — treating it as a new transaction date
+ * splits YouTube into junk rows and steals the real $10.49 debit.
+ */
+const VALUE_DATE_LINE =
+  /^\s*(?:value|posting|processed|txn|transaction)\s+date\b/i;
 
 function normalizeHeader(h: string): string {
   return h.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
@@ -263,7 +270,11 @@ function extractAmountFromRest(rest: string): { amount: string | null; merchant:
 
 export function isPlausiblePayment(merchantRaw: string, amount: string, date: string): boolean {
   const merchant = merchantRaw.trim();
-  if (merchant.length < 2 || merchant.length > 80) return false;
+  if (merchant.length < 2 || merchant.length > 160) return false;
+  // A line that is only settlement scaffolding is not a purchase.
+  if (/^value\s+date\b/i.test(merchant) && !/\byoutube|google|netflix|spotify|amaysim\b/i.test(merchant)) {
+    return false;
+  }
   if (HEADERISH_MERCHANT.test(merchant) || SKIP_LINE.test(merchant) || BOILERPLATE.test(merchant)) {
     return false;
   }
@@ -343,13 +354,25 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
     // Hard stop on long legal/footer paragraphs
     if (rawLine.length > 160) continue;
 
+    // Settlement "Value Date …" lines belong to the open purchase — never a new row.
+    if (VALUE_DATE_LINE.test(rawLine)) {
+      if (pending) {
+        const { amount } = extractAmountFromRest(
+          rawLine.replace(VALUE_DATE_LINE, "").trim(),
+        );
+        if (amount && !pending.amount) pending.amount = amount;
+      }
+      continue;
+    }
+
     let dateMatch = DATE_AT_START.exec(rawLine);
     let restAfterDate = "";
 
     if (dateMatch) {
       restAfterDate = rawLine.slice(dateMatch[0].length).trim();
-    } else {
-      // Only accept mid-line dates on short transaction-like lines (not footers).
+    } else if (!VALUE_DATE_LINE.test(rawLine)) {
+      // Only accept mid-line dates on short transaction-like lines (not footers
+      // and never "Value Date 15/01/2026", which is not a new purchase).
       const mid = DATE_ANYWHERE.exec(rawLine);
       if (
         mid &&
@@ -389,15 +412,34 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
         flush();
         continue;
       }
-      const amountMatch = TRAILING_AMOUNT.exec(rawLine);
-      if (amountMatch && !pending.amount) {
-        const n = parseAmountCell(amountMatch[1]!);
-        if (n !== null) pending.amount = formatAbsAmount(n);
-        const before = rawLine.slice(0, amountMatch.index).trim();
-        if (before && before.length <= 80) pending.merchantParts.push(before);
-      } else if (!/^\d+(\.\d+)?$/.test(rawLine) && !DATE_AT_START.test(rawLine)) {
+
+      // "10.49 1,523.67" — debit then running balance. Trailing-only would
+      // wrongly take the balance (that is how YouTube became $53.47).
+      const moneyHits = [...rawLine.matchAll(ALL_AMOUNTS)];
+      const moneyOnlyLine =
+        moneyHits.length >= 1 &&
+        rawLine.replace(ALL_AMOUNTS, "").replace(/[$,\s]/g, "").length === 0;
+
+      if (moneyHits.length >= 1 && !pending.amount) {
+        const { amount, merchant } = extractAmountFromRest(rawLine);
+        if (amount) pending.amount = amount;
+        if (
+          merchant &&
+          !VALUE_DATE_LINE.test(merchant) &&
+          merchant.length <= 80 &&
+          !moneyOnlyLine
+        ) {
+          const soFar = pending.merchantParts.join(" ").length;
+          if (soFar < 120) pending.merchantParts.push(merchant.slice(0, 80));
+        }
+      } else if (
+        !moneyOnlyLine &&
+        !/^\d+(\.\d+)?$/.test(rawLine) &&
+        !DATE_AT_START.test(rawLine) &&
+        !VALUE_DATE_LINE.test(rawLine)
+      ) {
         const soFar = pending.merchantParts.join(" ").length;
-        if (soFar < 80) pending.merchantParts.push(rawLine.slice(0, 80));
+        if (soFar < 120) pending.merchantParts.push(rawLine.slice(0, 80));
       }
     }
   }

@@ -43,6 +43,17 @@ const LEADING_BARE_DATE = new RegExp(
 /** Country/currency tail: only meaningful at the very end. */
 const TRAILING_LOCALE = /\s+(?:aus|au|aud|nzd|nz|nzl|usa|usd|us|gbr|gbp|uk|sgp|sg)\s*$/gi;
 
+/**
+ * CommBank often tacks the merchant's suburb/office on before the country code:
+ * "Google YouTubePremium Barangaroo AU". Drop a final proper-noun place when
+ * it sits in front of a country code (or alone at the end after the code went).
+ */
+const TRAILING_PLACE_BEFORE_LOCALE = new RegExp(
+  `\\s+[A-Z][A-Za-z]+(?:\\s+[A-Z][A-Za-z]+)?(?=\\s+(?:aus|au|aud|nzd|nz|nzl|usa|usd|us)\\b)`,
+  "g",
+);
+const TRAILING_PLACE = /\s+\b(?:barangaroo|sydney|melbourne|brisbane|perth|adelaide|canberra|parramatta|chatswood|toowong|southbank|docklands)\b\s*$/i;
+
 /** Store numbers: "WOOLWORTHS 1234 BONDI" → the 1234 says nothing. */
 const STORE_NUMBER = /\s+\d{3,6}(?=\s|$)/g;
 
@@ -136,7 +147,12 @@ export function cleanMerchantLabel(raw: string): string {
   }
 
   value = collapseWhitespace(value.replace(LEADING_BARE_DATE, " "));
+  // Place before locale first, then the locale itself, then any orphan place.
+  value = collapseWhitespace(value.replace(TRAILING_PLACE_BEFORE_LOCALE, " "));
   value = collapseWhitespace(value.replace(TRAILING_LOCALE, " "));
+  // Repeat: "AU AUS" and a leftover suburb both show up on CommBank lines.
+  value = collapseWhitespace(value.replace(TRAILING_LOCALE, " "));
+  value = collapseWhitespace(value.replace(TRAILING_PLACE, " "));
   value = collapseWhitespace(value.replace(TERMINAL_REF, " "));
   value = collapseWhitespace(value.replace(STORE_NUMBER, " "));
   // Only once: a name that is nothing but a code should fall back to the raw text.
