@@ -40,7 +40,7 @@ export default function DevCryptoPage() {
 
   return (
     <main className="mx-auto max-w-lg p-10">
-      <Card className="border-zinc-800 bg-zinc-950/50">
+      <Card>
         <CardHeader>
           <CardTitle>Crypto self-test</CardTitle>
           <CardDescription>

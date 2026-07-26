@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+
+import { ErrorNote } from "@/components/section";
 import { LedgerDashboard } from "@/features/ledger/ledger-dashboard";
 import { useAuthClient } from "@/features/auth/use-auth";
 import { apiEnsureSalt } from "@/lib/api";
@@ -32,16 +34,16 @@ export default function DashboardPage() {
   }, [accessToken]);
 
   if (!accessToken) {
-    return <p className="text-muted-foreground text-sm">Loading session...</p>;
+    return (
+      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+        Loading session…
+      </p>
+    );
   }
 
   return (
-    <div className="space-y-4">
-      {error ? (
-        <div className="section-shell border-destructive/40">
-          <p className="text-destructive text-sm">{error}</p>
-        </div>
-      ) : null}
+    <div className="space-y-6">
+      {error ? <ErrorNote>{error}</ErrorNote> : null}
       <LedgerDashboard accessToken={accessToken} saltB64={saltB64} />
     </div>
   );
