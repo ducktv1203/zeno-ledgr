@@ -1,9 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { Matcher } from "react-day-picker";
 import { Calendar, CalendarDayButton } from "@/components/ui/calendar";
 import {
+  dateToIsoLocal,
   expectedDatesInRange,
+  isoToLocalDate,
   todayIso,
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
@@ -19,60 +22,59 @@ type Props = {
   onSelectService?: (service: string) => void;
 };
 
-function toDate(iso: string): Date {
-  // Noon UTC avoids DST / timezone day-shift when DayPicker reads local date parts.
-  return new Date(`${iso}T12:00:00Z`);
-}
-
-function toIso(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function monthRange(month: Date): { start: string; end: string } {
-  const y = month.getUTCFullYear();
-  const m = month.getUTCMonth();
-  const start = new Date(Date.UTC(y, m, 1));
-  const end = new Date(Date.UTC(y, m + 1, 0));
-  // Pad a week either side so outside days still get markers
-  start.setUTCDate(start.getUTCDate() - 7);
-  end.setUTCDate(end.getUTCDate() + 7);
+function monthWindow(month: Date): { start: string; end: string } {
+  const y = month.getFullYear();
+  const m = month.getMonth();
+  const start = new Date(y, m, 1 - 7);
+  const end = new Date(y, m + 1, 7);
   return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
+    start: dateToIsoLocal(start),
+    end: dateToIsoLocal(end),
   };
 }
 
 export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) {
   const today = todayIso();
-  const [month, setMonth] = useState(() => toDate(today));
-  const [selected, setSelected] = useState<Date | undefined>(toDate(today));
+  const [month, setMonth] = useState(() => isoToLocalDate(today));
+  const [selected, setSelected] = useState<Date | undefined>(() => isoToLocalDate(today));
 
   const eventsByDay = useMemo(() => {
-    const { start, end } = monthRange(month);
+    const { start, end } = monthWindow(month);
     const map = new Map<string, DayEvent[]>();
+
+    const push = (iso: string, event: DayEvent) => {
+      const list = map.get(iso) ?? [];
+      if (list.some((e) => e.service === event.service && e.amount === event.amount)) return;
+      list.push(event);
+      map.set(iso, list);
+    };
+
     for (const sub of subscriptions) {
+      const event = { service: sub.service, amount: sub.amount };
+      // Always pin the rolled "next due" so the current cycle is visible
+      if (sub.nextExpectedDate) {
+        push(sub.nextExpectedDate, event);
+      }
       for (const date of expectedDatesInRange(sub, start, end)) {
-        const list = map.get(date) ?? [];
-        list.push({ service: sub.service, amount: sub.amount });
-        map.set(date, list);
+        push(date, event);
       }
     }
     return map;
   }, [subscriptions, month]);
 
-  const dueDates = useMemo(
-    () => [...eventsByDay.keys()].map((iso) => toDate(iso)),
+  const dueMatcher: Matcher = useMemo(
+    () => [...eventsByDay.keys()].map((iso) => isoToLocalDate(iso)),
     [eventsByDay],
   );
 
-  const selectedIso = selected ? toIso(selected) : null;
+  const selectedIso = selected ? dateToIsoLocal(selected) : null;
   const selectedEvents = selectedIso ? (eventsByDay.get(selectedIso) ?? []) : [];
 
   const monthDueTotal = useMemo(() => {
-    const y = month.getUTCFullYear();
-    const m = month.getUTCMonth();
-    const start = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
-    const end = new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
+    const y = month.getFullYear();
+    const m = month.getMonth();
+    const start = dateToIsoLocal(new Date(y, m, 1));
+    const end = dateToIsoLocal(new Date(y, m + 1, 0));
     let sum = 0;
     for (const [iso, events] of eventsByDay) {
       if (iso < start || iso > end) continue;
@@ -85,11 +87,10 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <p className="text-muted-foreground text-xs">
-          Expected dues this month · ~${monthDueTotal.toFixed(2)}
-        </p>
-      </div>
+      <p className="text-muted-foreground text-xs">
+        Days with a colored mark have an expected subscription due · ~$
+        {monthDueTotal.toFixed(2)} this month
+      </p>
 
       <Calendar
         mode="single"
@@ -98,7 +99,7 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
         selected={selected}
         onSelect={setSelected}
         showOutsideDays
-        className="w-full rounded-xl border border-border bg-card p-3 [--cell-size:2.75rem] sm:[--cell-size:3rem]"
+        className="w-full rounded-xl border border-border bg-card p-3 [--cell-size:2.75rem] sm:[--cell-size:3.25rem]"
         classNames={{
           root: "w-full",
           months: "w-full",
@@ -110,40 +111,54 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
           day: "group/day relative aspect-square h-full w-full flex-1 p-0 text-center",
         }}
         modifiers={{
-          due: dueDates,
+          due: dueMatcher,
         }}
         modifiersClassNames={{
-          due: "font-medium",
+          due: "[&_button]:font-semibold",
         }}
         components={{
           DayButton: ({ day, modifiers, className, ...props }) => {
-            const iso = toIso(day.date);
+            const iso = dateToIsoLocal(day.date);
             const events = eventsByDay.get(iso) ?? [];
+            const hasDue = events.length > 0 || Boolean(modifiers.due);
+            const label =
+              events.length === 1
+                ? events[0]!.service
+                : events.length > 1
+                  ? `${events.length} dues`
+                  : null;
+
             return (
               <CalendarDayButton
                 day={day}
                 modifiers={modifiers}
+                title={
+                  events.length
+                    ? events.map((e) => `${e.service} $${e.amount}`).join(", ")
+                    : undefined
+                }
                 className={cn(
                   className,
-                  events.length > 0 &&
+                  "relative",
+                  hasDue &&
                     !modifiers.selected &&
-                    "bg-sky-500/15 text-sky-50 hover:bg-sky-500/25",
+                    "bg-sky-500/20 text-sky-50 hover:bg-sky-500/30",
+                  hasDue && modifiers.selected && "ring-2 ring-sky-400/70 ring-offset-1 ring-offset-background",
                 )}
                 {...props}
               >
-                <span>{day.date.getUTCDate()}</span>
-                {events.length > 0 ? (
-                  <span className="flex items-center justify-center gap-0.5">
-                    {events.slice(0, 3).map((e) => (
-                      <span
-                        key={`${iso}-${e.service}`}
-                        className="bg-sky-400 size-1 rounded-full"
-                        title={`${e.service} · $${e.amount}`}
-                      />
-                    ))}
-                  </span>
+                <span className="text-sm tabular-nums">{day.date.getDate()}</span>
+                {hasDue ? (
+                  <>
+                    <span className="bg-sky-400 absolute bottom-1 left-1/2 size-1.5 -translate-x-1/2 rounded-full sm:hidden" />
+                    {label ? (
+                      <span className="text-sky-200/90 hidden max-w-full truncate px-0.5 text-[9px] leading-none sm:block">
+                        {label}
+                      </span>
+                    ) : null}
+                  </>
                 ) : (
-                  <span className="size-1 opacity-0" aria-hidden />
+                  <span className="hidden h-1.5 sm:block" aria-hidden />
                 )}
               </CalendarDayButton>
             );
@@ -159,7 +174,6 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
               day: "numeric",
               month: "long",
               year: "numeric",
-              timeZone: "UTC",
             })}
           </p>
           {selectedEvents.length === 0 ? (
@@ -173,7 +187,10 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
                     className="hover:bg-muted/50 flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-sm"
                     onClick={() => onSelectService?.(e.service)}
                   >
-                    <span>{e.service}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="bg-sky-400 size-1.5 rounded-full" />
+                      {e.service}
+                    </span>
                     <span className="font-mono text-xs">${e.amount}</span>
                   </button>
                 </li>
