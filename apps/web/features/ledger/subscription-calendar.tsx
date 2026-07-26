@@ -5,14 +5,15 @@ import type { Matcher } from "react-day-picker";
 
 import { Calendar, CalendarDayButton } from "@/components/ui/calendar";
 import {
-  dateToIsoLocal,
   expectedDatesInRange,
-  isoToLocalDate,
-  todayIso,
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
-import { formatDayMonth, formatMoney } from "@/lib/format";
+import { dateToIsoLocal, isoToLocalDate, todayIso } from "@/lib/dates";
+import { formatDate, formatDayMonth, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+/** Dots per cell before it collapses to a count — keeps every cell the same height. */
+const MAX_DOTS = 3;
 
 type DayEvent = {
   service: string;
@@ -37,7 +38,7 @@ function monthWindow(month: Date): { start: string; end: string } {
 export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) {
   const today = todayIso();
   const [month, setMonth] = useState(() => isoToLocalDate(today));
-  const [selected, setSelected] = useState<Date | undefined>(() => isoToLocalDate(today));
+  const [selected, setSelected] = useState<Date>(() => isoToLocalDate(today));
 
   const eventsByDay = useMemo(() => {
     const { start, end } = monthWindow(month);
@@ -64,8 +65,12 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
     [eventsByDay],
   );
 
-  const selectedIso = selected ? dateToIsoLocal(selected) : null;
-  const selectedEvents = selectedIso ? (eventsByDay.get(selectedIso) ?? []) : [];
+  const selectedIso = dateToIsoLocal(selected);
+  const selectedEvents = eventsByDay.get(selectedIso) ?? [];
+  const selectedTotal = selectedEvents.reduce(
+    (sum, event) => sum + (Number.parseFloat(event.amount) || 0),
+    0,
+  );
 
   const monthTotal = useMemo(() => {
     const y = month.getFullYear();
@@ -82,81 +87,115 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
 
   if (subscriptions.length === 0) return null;
 
+  const viewingToday =
+    month.getFullYear() === isoToLocalDate(today).getFullYear() &&
+    month.getMonth() === isoToLocalDate(today).getMonth();
+
   return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_270px]">
       <div className="panel-flush overflow-hidden">
-        <div className="flex items-baseline justify-between gap-3 border-b border-border bg-secondary/40 px-4 py-2.5">
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/40 px-4 py-2.5">
           <span className="eyebrow">Expected dues</span>
-          <span className="money text-[12px] text-muted-foreground">
-            ${formatMoney(monthTotal)} this month
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="money text-[12px] text-muted-foreground">
+              ${formatMoney(monthTotal)} this month
+            </span>
+            {viewingToday ? null : (
+              <button
+                type="button"
+                onClick={() => {
+                  const now = isoToLocalDate(today);
+                  setMonth(now);
+                  setSelected(now);
+                }}
+                className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Today
+              </button>
+            )}
+          </div>
         </div>
 
         <Calendar
           mode="single"
+          required
           month={month}
           onMonthChange={setMonth}
           selected={selected}
           onSelect={setSelected}
           showOutsideDays
-          className="w-full p-3 [--cell-size:2.75rem] sm:[--cell-size:3.25rem]"
+          className="w-full p-3 [--cell-size:2.6rem] sm:[--cell-size:3rem]"
           classNames={{
             root: "w-full",
             months: "w-full",
-            month: "w-full",
+            month: "w-full gap-3",
             month_grid: "w-full border-collapse",
             weekdays: "flex w-full",
-            weekday: "text-muted-foreground flex-1 select-none font-mono text-[10px] font-medium uppercase tracking-[0.14em]",
-            week: "mt-1 flex w-full",
-            day: "group/day relative aspect-square h-full w-full flex-1 p-0 text-center",
+            weekday:
+              "flex-1 select-none pb-1 font-mono text-[9.5px] font-medium uppercase tracking-[0.16em] text-muted-foreground",
+            week: "flex w-full",
+            day: "group/day relative h-[--cell-size] w-full flex-1 p-[1px] text-center",
+            today: "",
+            outside: "opacity-40",
           }}
           modifiers={{ due: dueMatcher }}
           components={{
             DayButton: ({ day, modifiers, className, ...props }) => {
               const iso = dateToIsoLocal(day.date);
               const events = eventsByDay.get(iso) ?? [];
-              const hasDue = events.length > 0;
-              const label =
-                events.length === 1
-                  ? events[0]!.service
-                  : events.length > 1
-                    ? `${events.length} dues`
-                    : null;
+              const isToday = iso === today;
+              const extra = events.length - MAX_DOTS;
 
               return (
                 <CalendarDayButton
                   day={day}
                   modifiers={modifiers}
                   title={
-                    hasDue
+                    events.length
                       ? events.map((e) => `${e.service} $${formatMoney(e.amount)}`).join(", ")
                       : undefined
                   }
                   className={cn(
-                    "rounded-sm font-sans",
-                    hasDue && !modifiers.selected && "bg-ochre/[0.14] hover:bg-ochre/25",
-                    hasDue && "font-medium",
+                    "flex h-full w-full min-w-0 flex-col items-center justify-center gap-1 rounded-sm p-0 font-sans aspect-auto",
+                    events.length &&
+                      !modifiers.selected &&
+                      "bg-ochre/[0.10] hover:bg-ochre/20",
+                    isToday && !modifiers.selected && "ring-1 ring-inset ring-foreground/25",
+                    className,
                   )}
                   {...props}
                 >
-                  <span className="text-[13px] tabular-nums">{day.date.getDate()}</span>
-                  {hasDue ? (
-                    <>
-                      <span className="mx-auto block h-1 w-1 rounded-full bg-oxblood sm:hidden" />
-                      {label ? (
-                        <span
-                          className={cn(
-                            "hidden max-w-full truncate px-0.5 text-[9px] leading-none sm:block",
-                            modifiers.selected ? "text-primary-foreground/80" : "text-oxblood",
-                          )}
-                        >
-                          {label}
-                        </span>
-                      ) : null}
-                    </>
-                  ) : (
-                    <span className="hidden h-[9px] sm:block" aria-hidden />
-                  )}
+                  <span
+                    className={cn(
+                      "text-[13px] leading-none tabular-nums",
+                      events.length && "font-medium",
+                    )}
+                  >
+                    {day.date.getDate()}
+                  </span>
+
+                  {/* Fixed-height marker row keeps every cell the same size. */}
+                  <span className="flex h-[5px] items-center justify-center gap-[3px]">
+                    {events.slice(0, MAX_DOTS).map((event) => (
+                      <span
+                        key={`${iso}-${event.service}`}
+                        className={cn(
+                          "h-[4px] w-[4px] rounded-full",
+                          modifiers.selected ? "bg-primary-foreground/70" : "bg-oxblood",
+                        )}
+                      />
+                    ))}
+                    {extra > 0 ? (
+                      <span
+                        className={cn(
+                          "font-mono text-[8px] leading-none",
+                          modifiers.selected ? "text-primary-foreground/70" : "text-oxblood",
+                        )}
+                      >
+                        +{extra}
+                      </span>
+                    ) : null}
+                  </span>
                 </CalendarDayButton>
               );
             },
@@ -164,15 +203,17 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
         />
       </div>
 
-      {/* Day detail rail */}
-      <aside className="panel-flush h-fit p-4">
-        <p className="eyebrow">{selected ? formatDayMonth(selected) : "Pick a day"}</p>
+      <aside className="panel-flush flex h-fit flex-col p-4">
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="eyebrow">{formatDayMonth(selected)}</p>
+          {selectedEvents.length ? (
+            <span className="money text-[12px]">${formatMoney(selectedTotal)}</span>
+          ) : null}
+        </div>
 
         {selectedEvents.length === 0 ? (
           <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-            {selected
-              ? "Nothing due on this day."
-              : "Select a marked day to see what is due."}
+            Nothing due on this day. Marked days carry a dot per subscription.
           </p>
         ) : (
           <ul className="mt-3 space-y-px">
@@ -183,11 +224,11 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
                   className="flex w-full items-baseline justify-between gap-3 rounded-sm px-1.5 py-2 text-left transition-colors hover:bg-accent/60"
                   onClick={() => onSelectService?.(event.service)}
                 >
-                  <span className="flex items-baseline gap-2 text-[13px]">
-                    <span className="h-1 w-1 shrink-0 rounded-full bg-oxblood" />
-                    {event.service}
+                  <span className="flex min-w-0 items-baseline gap-2 text-[13px]">
+                    <span className="h-1 w-1 shrink-0 translate-y-[-2px] rounded-full bg-oxblood" />
+                    <span className="truncate">{event.service}</span>
                   </span>
-                  <span className="money text-[13px]">${formatMoney(event.amount)}</span>
+                  <span className="money shrink-0 text-[13px]">${formatMoney(event.amount)}</span>
                 </button>
               </li>
             ))}
@@ -197,16 +238,27 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
         <hr className="hairline my-4" />
 
         <p className="eyebrow mb-2.5">All recurring</p>
-        <ul className="space-y-1.5">
+        <ul className="space-y-2">
           {subscriptions.map((sub) => (
             <li key={`${sub.service}-${sub.amount}`}>
               <button
                 type="button"
-                className="flex w-full items-baseline justify-between gap-3 text-left text-[12.5px] text-muted-foreground transition-colors hover:text-foreground"
+                className="group flex w-full items-baseline justify-between gap-3 text-left"
                 onClick={() => onSelectService?.(sub.service)}
               >
-                <span className="truncate">{sub.service}</span>
-                <span className="money shrink-0">${formatMoney(sub.amount)}</span>
+                <span className="min-w-0">
+                  <span className="block truncate text-[12.5px] text-muted-foreground transition-colors group-hover:text-foreground">
+                    {sub.service}
+                  </span>
+                  {sub.nextExpectedDate ? (
+                    <span className="money block text-[10.5px] text-muted-foreground/70">
+                      {formatDate(sub.nextExpectedDate)}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="money shrink-0 text-[12.5px] text-muted-foreground transition-colors group-hover:text-foreground">
+                  ${formatMoney(sub.amount)}
+                </span>
               </button>
             </li>
           ))}

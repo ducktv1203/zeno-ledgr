@@ -5,8 +5,10 @@ import { Plus } from "lucide-react";
 
 import { ErrorNote } from "@/components/section";
 import { Button } from "@/components/ui/button";
+import { DateField } from "@/components/ui/date-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { todayIso } from "@/lib/dates";
 
 type Props = {
   onSubmit: (entry: { merchantRaw: string; amount: string; date: string }) => Promise<void>;
@@ -15,7 +17,7 @@ type Props = {
 export function ManualEntryForm({ onSubmit }: Props) {
   const [merchant, setMerchant] = useState("");
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => todayIso());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,14 +63,7 @@ export function ManualEntryForm({ onSubmit }: Props) {
         </div>
         <div className="space-y-2">
           <Label htmlFor="entry-date">Date</Label>
-          <Input
-            id="entry-date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="money"
-            required
-          />
+          <DateField id="entry-date" value={date} onChange={setDate} disabled={saving} />
         </div>
       </div>
 

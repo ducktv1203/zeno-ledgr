@@ -80,6 +80,11 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
 
   const subscriptions = useMemo(() => detectSubscriptions(ledger.rows), [ledger.rows]);
 
+  const manualCount = useMemo(
+    () => ledger.rows.filter((row) => !row.statementId).length,
+    [ledger.rows],
+  );
+
   const subCharges = useMemo(
     () => (selectedSub ? rowsForSubscription(selectedSub, ledger.rows) : []),
     [selectedSub, ledger.rows],
@@ -130,7 +135,6 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
 
       <Section
         className="rise rise-2"
-        index="01"
         eyebrow="Recurring"
         title="Subscriptions and what is due next"
         description="Cadence is inferred from your statements and rolled forward into the current cycle, so a next due date is never stranded in the past. Pick a row or a marked day to see every charge behind it."
@@ -152,12 +156,11 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
 
       <Section
         className="rise rise-3"
-        index="02"
         eyebrow="History"
         title="Payments"
         description={
           activeStatement
-            ? `Every payment imported from ${activeStatement.filename}, 25 to a page.`
+            ? `Every payment imported from ${activeStatement.filename}. Search, sort and filter without leaving the page.`
             : "One row per payment — merchant, amount, transaction date. Bank notices and $0 lines never make it in."
         }
       >
@@ -166,7 +169,6 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
 
       <Section
         className="rise rise-4"
-        index="03"
         eyebrow="Analysis"
         title="Where the money goes"
         description="Spend totalled per merchant across the rows currently in view."
@@ -175,7 +177,6 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       </Section>
 
       <Section
-        index="04"
         eyebrow="Sources"
         title="Statements"
         description="Open a statement to filter payments down to it. Deleting one removes the file and every encrypted row that came from it — the way to re-import a corrected copy."
@@ -183,6 +184,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         <StatementList
           statements={ledger.statements}
           activeStatementId={activeStatementId}
+          manualCount={manualCount}
           onOpen={(id) => {
             setActiveStatementId(id);
             setSelectedSub(null);
@@ -196,7 +198,6 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       </Section>
 
       <Section
-        index="05"
         eyebrow="Import"
         title="Add a statement"
         description="Read on this device, encrypted on this device. Nothing legible leaves the browser."
@@ -211,7 +212,6 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
       </Section>
 
       <Section
-        index="06"
         eyebrow="Manual"
         title="Add a single payment"
         description="For anything a statement missed. Encrypted client-side before it is stored, like every other row."

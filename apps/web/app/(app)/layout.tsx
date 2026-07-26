@@ -10,6 +10,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { clearSessionCrypto } from "@/lib/crypto";
 import { useAuthClient } from "@/features/auth/use-auth";
+import { usePreferences } from "@/lib/preferences";
+import { useAutoLock } from "@/lib/use-auto-lock";
 import { useCryptoUnlocked } from "@/lib/use-crypto-status";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +27,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
   const cryptoActive = useCryptoUnlocked();
+  const { preferences } = usePreferences();
+
+  useAutoLock(preferences.autoLockMinutes, cryptoActive);
 
   useEffect(() => {
     if (!supabase) {

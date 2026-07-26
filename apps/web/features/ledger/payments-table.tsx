@@ -16,6 +16,7 @@ import {
 
 import { EmptyNote } from "@/components/section";
 import { Button } from "@/components/ui/button";
+import { DateField } from "@/components/ui/date-field";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -394,17 +395,26 @@ function FilterField({
   type: "number" | "date";
   placeholder?: string;
 }) {
+  if (type === "date") {
+    return (
+      <div className="space-y-1.5">
+        <span className="eyebrow">{label}</span>
+        <DateField value={value} onChange={onChange} placeholder="Any" />
+      </div>
+    );
+  }
+
   return (
     <label className="block space-y-1.5">
       <span className="eyebrow">{label}</span>
       <Input
-        type={type}
+        type="number"
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="money h-8 text-[12.5px]"
-        step={type === "number" ? "0.01" : undefined}
-        min={type === "number" ? "0" : undefined}
+        className="money h-9 text-[12.5px]"
+        step="0.01"
+        min="0"
       />
     </label>
   );
