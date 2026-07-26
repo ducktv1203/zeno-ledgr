@@ -12,3 +12,11 @@ venv
 .pytest_cache
 .mypy_cache
 *.egg-info
+
+# Local process stdout/stderr from `npm run dev` / uvicorn redirects — never commit.
+*.log
+.api-dev.*
+.web-dev.*
+apps/api/api.dev.*
+apps/web/web.dev.*
+.ui-shots/
