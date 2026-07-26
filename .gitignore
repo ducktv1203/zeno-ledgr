@@ -1,22 +1,33 @@
-node_modules
-.next
-dist
-.turbo
-.env
-.env.local
-.env*.local
-__pycache__
-*.pyc
-.venv
-venv
-.pytest_cache
-.mypy_cache
-*.egg-info
+# Dependencies / build
+node_modules/
+.next/
+dist/
+.turbo/
 
-# Local process stdout/stderr from `npm run dev` / uvicorn redirects — never commit.
+# Secrets — keep *.example templates, ignore every real env file anywhere
+.env
+.env.*
+!.env.example
+!**/.env.example
+apps/*/.env
+apps/*/.env.*
+!apps/*/.env.example
+
+# Local process logs (uvicorn / next / shell redirects)
 *.log
 .api-dev.*
 .web-dev.*
 apps/api/api.dev.*
 apps/web/web.dev.*
+
+# Scratch / screenshots from local verification
 .ui-shots/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
