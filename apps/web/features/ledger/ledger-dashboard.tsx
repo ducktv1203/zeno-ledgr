@@ -16,6 +16,7 @@ import { SubscriptionsPanel } from "@/features/ledger/subscriptions-panel";
 import { VaultPanel } from "@/features/ledger/vault-panel";
 import { useLedger } from "@/features/ledger/use-ledger";
 import { clearSessionCrypto, unlockWithPassword } from "@/lib/crypto";
+import { useCryptoUnlocked } from "@/lib/use-crypto-status";
 import {
   detectSubscriptions,
   rowsForSubscription,
@@ -37,14 +38,19 @@ function monthlyEquivalent(subscriptions: DetectedSubscription[]): number {
 }
 
 export function LedgerDashboard({ accessToken, saltB64 }: Props) {
-  const [encryptionActive, setEncryptionActive] = useState(false);
+  // Sourced from the crypto module so an idle auto-lock closes the book too.
+  const encryptionActive = useCryptoUnlocked();
   const [activeStatementId, setActiveStatementId] = useState<string | null>(null);
   const [selectedSub, setSelectedSub] = useState<DetectedSubscription | null>(null);
 
   const ledger = useLedger(accessToken, encryptionActive);
 
   useEffect(() => {
-    if (!encryptionActive) return;
+    if (!encryptionActive) {
+      setActiveStatementId(null);
+      setSelectedSub(null);
+      return;
+    }
     void ledger.loadFirstPage();
   }, [encryptionActive, ledger.loadFirstPage]);
 
@@ -52,17 +58,9 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
     async (masterPassword: string) => {
       if (!saltB64) return;
       await unlockWithPassword(masterPassword, saltB64);
-      setEncryptionActive(true);
     },
     [saltB64],
   );
-
-  function lock() {
-    clearSessionCrypto();
-    setEncryptionActive(false);
-    setActiveStatementId(null);
-    setSelectedSub(null);
-  }
 
   const visibleRows = useMemo(() => {
     if (!activeStatementId) return ledger.rows;
@@ -115,7 +113,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
             </button>
           ) : null}
         </div>
-        <Button variant="outline" onClick={lock}>
+        <Button variant="outline" onClick={() => clearSessionCrypto()}>
           <Lock className="h-4 w-4" />
           Lock session
         </Button>

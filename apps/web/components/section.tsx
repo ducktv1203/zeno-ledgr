@@ -3,9 +3,9 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Editorial section shell: numbered eyebrow, serif title, hairline rule.
- * Used for every major block of the console so the page reads like a
- * ruled ledger rather than a stack of floating cards.
+ * Editorial section shell: eyebrow, serif title, hairline rule. Used for every
+ * major block of the console so the page reads like a ruled ledger rather than
+ * a stack of floating cards.
  */
 
 type SectionProps = React.HTMLAttributes<HTMLElement> & {

@@ -127,8 +127,11 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
           className="w-full p-3 [--cell-size:2.6rem] sm:[--cell-size:3rem]"
           classNames={{
             root: "w-full",
-            months: "w-full",
-            month: "w-full gap-3",
+            // `relative` must survive: the prev/next nav is absolutely
+            // positioned against this box, and without it the arrows escape
+            // into the panel header.
+            months: "relative flex w-full flex-col",
+            month: "flex w-full flex-col gap-3",
             month_grid: "w-full border-collapse",
             weekdays: "flex w-full",
             weekday:

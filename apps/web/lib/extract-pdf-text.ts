@@ -130,7 +130,6 @@ export async function readPdfStatement(
   const loadingTask = getDocument({
     data: bytes,
     useSystemFonts: true,
-    isEvalSupported: false,
   });
   const pdf: PDFDocumentProxy = await loadingTask.promise;
   const pageCount = pdf.numPages;

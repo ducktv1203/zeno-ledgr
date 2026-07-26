@@ -1,12 +1,16 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { CalendarDays } from "lucide-react";
 
 import { Calendar } from "@/components/ui/calendar";
 import { dateToIsoLocal, isoToLocalDate, todayIso } from "@/lib/dates";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+const PANEL_WIDTH = 320;
+const PANEL_HEIGHT = 360;
 
 type Props = {
   id?: string;
@@ -31,13 +35,39 @@ export function DateField({
   placeholder = "Pick a date",
 }: Props) {
   const [open, setOpen] = React.useState(false);
-  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [position, setPosition] = React.useState<{ top: number; left: number } | null>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const panelRef = React.useRef<HTMLDivElement>(null);
+
+  /*
+   * Rendered in a portal with fixed coordinates: every section on the page is
+   * `overflow-hidden`, which would otherwise clip the panel.
+   */
+  const place = React.useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUp = spaceBelow < PANEL_HEIGHT && rect.top > spaceBelow;
+
+    setPosition({
+      top: openUp ? Math.max(8, rect.top - PANEL_HEIGHT - 6) : rect.bottom + 6,
+      left: Math.min(Math.max(8, rect.left), window.innerWidth - PANEL_WIDTH - 8),
+    });
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    place();
+  }, [open, place]);
 
   React.useEffect(() => {
     if (!open) return;
 
     function onPointerDown(event: MouseEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") setOpen(false);
@@ -45,11 +75,15 @@ export function DateField({
 
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
     return () => {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
     };
-  }, [open]);
+  }, [open, place]);
 
   const selected = value ? isoToLocalDate(value) : undefined;
 
@@ -92,7 +126,11 @@ export function DateField({
               setOpen(false);
             }}
             className="w-full [--cell-size:2.15rem]"
-            classNames={{ root: "w-full", months: "w-full", month: "w-full" }}
+            classNames={{
+              root: "w-full",
+              months: "relative flex w-full flex-col",
+              month: "flex w-full flex-col gap-3",
+            }}
           />
 
           <div className="flex items-center justify-between gap-2 border-t border-border px-2 py-1.5">

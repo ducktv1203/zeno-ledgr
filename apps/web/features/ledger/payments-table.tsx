@@ -29,13 +29,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatCount, formatDate, formatMoney } from "@/lib/format";
+import {
+  usePreferences,
+  type PaymentsPageSize as PageSize,
+  type PaymentsView as ViewMode,
+} from "@/lib/preferences";
 import type { DecryptedLedgerRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type SortKey = "date" | "amount" | "merchant";
 type SortDirection = "asc" | "desc";
-type ViewMode = "table" | "compact" | "list";
-type PageSize = "25" | "50" | "100" | "all";
 
 const PAGE_SIZES: { value: PageSize; label: string }[] = [
   { value: "25", label: "25" },
@@ -69,14 +72,19 @@ function compareRows(a: DecryptedLedgerRow, b: DecryptedLedgerRow, key: SortKey)
 }
 
 export function PaymentsTable({ rows, loading }: Props) {
+  const { preferences } = usePreferences();
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
-  const [view, setView] = useState<ViewMode>("table");
-  const [pageSize, setPageSize] = useState<PageSize>("25");
+  const [viewOverride, setViewOverride] = useState<ViewMode | null>(null);
+  const [pageSizeOverride, setPageSizeOverride] = useState<PageSize | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [page, setPage] = useState(1);
+
+  // Settings choose the starting view; the toolbar overrides it for this visit.
+  const view = viewOverride ?? preferences.paymentsView;
+  const pageSize = pageSizeOverride ?? preferences.paymentsPageSize;
 
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
@@ -197,7 +205,7 @@ export function PaymentsTable({ rows, loading }: Props) {
           <Segmented
             label="Row density"
             value={view}
-            onChange={setView}
+            onChange={setViewOverride}
             options={[
               { value: "table", label: <Rows2 className="h-3.5 w-3.5" />, title: "Comfortable" },
               { value: "compact", label: <Rows3 className="h-3.5 w-3.5" />, title: "Compact" },
@@ -205,7 +213,12 @@ export function PaymentsTable({ rows, loading }: Props) {
             ]}
           />
 
-          <Segmented label="Rows per page" value={pageSize} onChange={setPageSize} options={PAGE_SIZES} />
+          <Segmented
+            label="Rows per page"
+            value={pageSize}
+            onChange={setPageSizeOverride}
+            options={PAGE_SIZES}
+          />
         </div>
 
         {filtersOpen ? (
@@ -312,7 +325,9 @@ export function PaymentsTable({ rows, loading }: Props) {
                   <div className={cn("truncate font-medium", dense && "text-[12.5px]")}>
                     {row.merchantDisplay}
                   </div>
-                  {!dense && !row.merchantMatched && row.merchantRaw !== row.merchantDisplay ? (
+                  {preferences.showRawDescriptors &&
+                  !dense &&
+                  row.merchantRaw !== row.merchantDisplay ? (
                     <div className="truncate font-mono text-[11px] text-muted-foreground">
                       {row.merchantRaw}
                     </div>
