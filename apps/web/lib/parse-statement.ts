@@ -1,4 +1,4 @@
-import type { LedgerPlaintext } from "@/lib/crypto";
+import type { CashFlow, LedgerPlaintext } from "@/lib/crypto";
 import type { StatementReadProgress } from "@/lib/extract-pdf-text";
 
 export type ParsedStatementRow = LedgerPlaintext & {
@@ -172,15 +172,84 @@ function ymd(y: number, m: number, d: number): string | null {
   return `${String(y).padStart(4, "0")}-${pad2(m)}-${pad2(d)}`;
 }
 
+export type StatementPeriod = {
+  /** Inclusive ISO start (YYYY-MM-DD). */
+  start: string;
+  /** Inclusive ISO end (YYYY-MM-DD). */
+  end: string;
+};
+
+export type DateResolveContext = {
+  /** Last successfully parsed transaction date (ordering hint). */
+  previousDate?: string | null;
+  /** Whole statement window — preferred for yearless body rows. */
+  period?: StatementPeriod | null;
+  /** Legacy single-year fallback when no period is known. */
+  fallbackYear?: number | null;
+};
+
+/**
+ * Pick the calendar year for a day/month that omitted it.
+ * Prefer a date that lands inside the statement period (so "16 Jan" on an
+ * Aug 2025–Jan 2026 statement becomes 2026, not 2025 after a December row).
+ */
+function resolvePartialDate(
+  yearHints: number[],
+  month: number,
+  day: number,
+  ctx: DateResolveContext,
+): string | null {
+  const years = [...new Set(yearHints.filter((y) => y >= 2005 && y <= 2100))];
+  if (years.length === 0) return null;
+
+  const candidates = years
+    .map((y) => ymd(y, month, day))
+    .filter((d): d is string => Boolean(d));
+  if (candidates.length === 0) return null;
+
+  const { period, previousDate } = ctx;
+  if (period) {
+    const inRange = candidates.filter((d) => d >= period.start && d <= period.end);
+    if (inRange.length === 1) return inRange[0]!;
+    if (inRange.length > 1) {
+      if (previousDate) {
+        const nearest = [...inRange].sort(
+          (a, b) =>
+            Math.abs(Date.parse(a) - Date.parse(previousDate)) -
+            Math.abs(Date.parse(b) - Date.parse(previousDate)),
+        )[0];
+        if (nearest) return nearest;
+      }
+      return inRange[inRange.length - 1]!;
+    }
+  }
+
+  if (previousDate) {
+    const nearest = [...candidates].sort(
+      (a, b) =>
+        Math.abs(Date.parse(a) - Date.parse(previousDate)) -
+        Math.abs(Date.parse(b) - Date.parse(previousDate)),
+    )[0];
+    if (nearest) return nearest;
+  }
+
+  return candidates[candidates.length - 1]!;
+}
+
 /**
  * Accepts ISO, AU slash dates, and month-name dates (01 Jul 2026 / Jul 1, 2026).
- * CommBank body rows sometimes omit the year ("16 Jan") — pass fallbackYear
- * from the statement period or the previous transaction.
+ * CommBank body rows sometimes omit the year ("16 Jan") — pass the statement
+ * period so Jan after Dec 2025 still resolves to Jan 2026 when the period ends then.
  */
 export function normalizeStatementDate(
   raw: string,
-  fallbackYear?: number | null,
+  ctx: DateResolveContext | number | null = null,
 ): string | null {
+  const context: DateResolveContext =
+    typeof ctx === "number" || ctx === null || ctx === undefined
+      ? { fallbackYear: ctx ?? null }
+      : ctx;
+
   const s = raw.trim().replace(/\s+/g, " ");
   if (!s) return null;
 
@@ -203,18 +272,30 @@ export function normalizeStatementDate(
       month = a;
       day = b;
     } else {
+      // AU statements: day/month/year
       day = a;
       month = b;
     }
     return ymd(y, month, day);
   }
 
+  const yearHints = (): number[] => {
+    const hints: number[] = [];
+    if (context.period) {
+      hints.push(Number(context.period.start.slice(0, 4)));
+      hints.push(Number(context.period.end.slice(0, 4)));
+    }
+    if (context.previousDate) hints.push(Number(context.previousDate.slice(0, 4)));
+    if (context.fallbackYear) hints.push(context.fallbackYear);
+    return hints;
+  };
+
   const slashNoYear = /^(\d{1,2})[/.-](\d{1,2})$/.exec(s);
-  if (slashNoYear && fallbackYear) {
+  if (slashNoYear) {
     const a = Number(slashNoYear[1]);
     const b = Number(slashNoYear[2]);
-    // AU statements: day/month
-    return ymd(fallbackYear, b, a);
+    // AU: day/month
+    return resolvePartialDate(yearHints(), b, a, context);
   }
 
   const dmyName = new RegExp(`^(\\d{1,2})\\s+(${MONTH_NAMES})\\.?\\s+(\\d{2,4})$`, "i").exec(s);
@@ -226,9 +307,9 @@ export function normalizeStatementDate(
   }
 
   const dmyNoYear = new RegExp(`^(\\d{1,2})\\s+(${MONTH_NAMES})\\.?$`, "i").exec(s);
-  if (dmyNoYear && fallbackYear) {
+  if (dmyNoYear) {
     const month = MONTH_MAP[dmyNoYear[2]!.toLowerCase()]!;
-    return ymd(fallbackYear, month, Number(dmyNoYear[1]));
+    return resolvePartialDate(yearHints(), month, Number(dmyNoYear[1]), context);
   }
 
   const mdyName = new RegExp(`^(${MONTH_NAMES})\\.?\\s+(\\d{1,2}),?\\s+(\\d{2,4})$`, "i").exec(s);
@@ -239,23 +320,47 @@ export function normalizeStatementDate(
     return ymd(y, month, Number(mdyName[2]));
   }
 
+  const mdyNoYear = new RegExp(`^(${MONTH_NAMES})\\.?\\s+(\\d{1,2})$`, "i").exec(s);
+  if (mdyNoYear) {
+    const month = MONTH_MAP[mdyNoYear[1]!.toLowerCase()]!;
+    return resolvePartialDate(yearHints(), month, Number(mdyNoYear[2]), context);
+  }
+
   const t = Date.parse(s);
   if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
   return null;
 }
 
-function inferStatementYear(lines: string[]): number | null {
-  for (const line of lines.slice(0, 40)) {
-    const period =
-      /statement\s+period[^0-9]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}).*?(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/i.exec(
-        line,
-      ) ??
-      /(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{2,4}).*?(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{2,4})/i.exec(
-        line,
-      );
-    if (period) {
-      const end = normalizeStatementDate(period[2]!);
-      if (end) return Number(end.slice(0, 4));
+const PERIOD_DATE =
+  `(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}|\\d{1,2}\\s+(?:${MONTH_NAMES})\\.?\\s+\\d{2,4}|(?:${MONTH_NAMES})\\.?\\s+\\d{1,2},?\\s+\\d{2,4})`;
+
+/**
+ * Read "Statement period 01 Aug 2025 – 31 Jan 2026" (and close variants) so
+ * yearless transaction dates can be placed in the right calendar year.
+ */
+export function inferStatementPeriod(lines: string[]): StatementPeriod | null {
+  const joined = lines.slice(0, 80).join(" ");
+  const patterns = [
+    new RegExp(
+      `statement\\s*period\\s*:?\\s*${PERIOD_DATE}\\s*(?:-|–|—|to)\\s*${PERIOD_DATE}`,
+      "i",
+    ),
+    new RegExp(
+      `period\\s*:?\\s*${PERIOD_DATE}\\s*(?:-|–|—|to)\\s*${PERIOD_DATE}`,
+      "i",
+    ),
+    new RegExp(`${PERIOD_DATE}\\s*(?:-|–|—|to)\\s*${PERIOD_DATE}`, "i"),
+  ];
+
+  for (const source of [...lines.slice(0, 80), joined]) {
+    for (const re of patterns) {
+      const match = re.exec(source);
+      if (!match) continue;
+      const start = normalizeStatementDate(match[1]!);
+      const end = normalizeStatementDate(match[2]!);
+      if (start && end && start <= end) return { start, end };
+      // Swapped if OCR reversed the ends
+      if (start && end && end < start) return { start: end, end: start };
     }
   }
   return null;
@@ -283,17 +388,21 @@ function resolveAmount(
   amountIdx: number,
   debitIdx: number,
   creditIdx: number,
-): string | null {
+): { amount: string; flow: CashFlow | null } | null {
   if (amountIdx >= 0) {
-    const n = parseAmountCell(cells[amountIdx] ?? "");
+    const raw = cells[amountIdx] ?? "";
+    const n = parseAmountCell(raw);
     if (n === null) return null;
-    return formatAbsAmount(n);
+    let flow: CashFlow | null = null;
+    if (/\bCR\b|CREDIT/i.test(raw) || n < 0) flow = "in";
+    else if (/\bDR\b|DEBIT/i.test(raw)) flow = "out";
+    return { amount: formatAbsAmount(n), flow };
   }
 
   const debit = debitIdx >= 0 ? parseAmountCell(cells[debitIdx] ?? "") : null;
   const credit = creditIdx >= 0 ? parseAmountCell(cells[creditIdx] ?? "") : null;
-  if (debit !== null && debit !== 0) return formatAbsAmount(debit);
-  if (credit !== null && credit !== 0) return formatAbsAmount(credit);
+  if (debit !== null && debit !== 0) return { amount: formatAbsAmount(debit), flow: "out" };
+  if (credit !== null && credit !== 0) return { amount: formatAbsAmount(credit), flow: "in" };
   return null;
 }
 
@@ -305,46 +414,87 @@ function cleanOcrLine(line: string): string {
     .trim();
 }
 
+type ExtractedAmount = {
+  amount: string | null;
+  merchant: string;
+  flow: CashFlow | null;
+};
+
+function flowFromMoneyToken(token: string, value: number): CashFlow | null {
+  if (/\bCR\b|CREDIT/i.test(token)) return "in";
+  if (/\bDR\b|DEBIT/i.test(token)) return "out";
+  // Parentheses / leading minus often mark a credit/refund on statements.
+  if (value < 0 || /^\(.*\)$/.test(token.trim())) return "in";
+  return null;
+}
+
 /**
  * Pull the transaction amount out of free text that may also include a
  * running balance, and on CommBank-style tables an empty debit/credit column
  * as 0.00:
- *   "… 10.49 0.00 1,523.67"  → debit 10.49 (not 0.00, not balance)
- *   "… 0.00 2,450.00 5,000" → credit 2,450
+ *   "… 10.49 0.00 1,523.67"  → debit 10.49 out (not 0.00, not balance)
+ *   "… 0.00 2,450.00 5,000" → credit 2,450 in
  *   "… 10.49 1,523.67"       → 10.49 (amount + balance)
  */
-function extractAmountFromRest(rest: string): { amount: string | null; merchant: string } {
+function extractAmountFromRest(rest: string): ExtractedAmount {
   const moneyHits = [...rest.matchAll(new RegExp(MONEY_TOKEN, "gi"))];
   if (moneyHits.length === 0) {
-    return { amount: null, merchant: rest.trim() };
+    return { amount: null, merchant: rest.trim(), flow: null };
   }
 
   const parsed = moneyHits.map((hit) => ({
     hit,
+    token: hit[0]!,
     value: parseAmountCell(hit[1] ?? hit[0]!),
   }));
 
   let chosen: (typeof parsed)[number] | undefined;
+  let flow: CashFlow | null = null;
 
   if (parsed.length >= 3) {
     // Debit | Credit | Balance — ignore balance; take the non-zero movement.
-    chosen = parsed.slice(0, -1).find((p) => p.value !== null && p.value !== 0);
+    const debit = parsed[0]!;
+    const credit = parsed[1]!;
+    if (debit.value !== null && debit.value !== 0) {
+      chosen = debit;
+      flow = "out";
+    } else if (credit.value !== null && credit.value !== 0) {
+      chosen = credit;
+      flow = "in";
+    }
   } else if (parsed.length === 2) {
     // Amount | Balance (or 0.00 | Credit). Prefer the first non-zero.
     chosen =
       parsed.find((p) => p.value !== null && p.value !== 0) ?? parsed[0];
+    if (chosen) flow = flowFromMoneyToken(chosen.token, chosen.value ?? 0);
+    // "0.00 2,450.00" with no balance column — treat as credit then amount.
+    if (
+      !flow &&
+      parsed[0]!.value === 0 &&
+      parsed[1]!.value !== null &&
+      parsed[1]!.value !== 0
+    ) {
+      chosen = parsed[1];
+      flow = "in";
+    }
   } else {
     chosen = parsed[0];
+    if (chosen) flow = flowFromMoneyToken(chosen.token, chosen.value ?? 0);
   }
 
   if (!chosen || chosen.value === null || chosen.value === 0) {
-    return { amount: null, merchant: rest.slice(0, moneyHits[0]!.index).trim() };
+    return {
+      amount: null,
+      merchant: rest.slice(0, moneyHits[0]!.index).trim(),
+      flow: null,
+    };
   }
 
   return {
     amount: formatAbsAmount(chosen.value),
     // Everything from the first money token onward is columns, not merchant.
     merchant: rest.slice(0, moneyHits[0]!.index).trim(),
+    flow,
   };
 }
 
@@ -390,15 +540,17 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
   const rows: ParsedStatementRow[] = [];
   const seen = new Set<string>();
   let skipped = 0;
-  let fallbackYear = inferStatementYear(lines);
+  const period = inferStatementPeriod(lines);
+  let previousDate: string | null = period?.start ?? null;
   /** Amounts that pdf.js emitted above their date row (common on CommBank). */
-  let orphanAmount: string | null = null;
+  let orphan: { amount: string; flow: CashFlow | null } | null = null;
 
   let pending: {
     line: number;
     date: string;
     merchantParts: string[];
     amount: string | null;
+    flow: CashFlow | null;
   } | null = null;
 
   function flush() {
@@ -423,6 +575,7 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
         merchantRaw,
         amount: pending.amount,
         date: pending.date,
+        ...(pending.flow ? { flow: pending.flow } : {}),
       };
       const key = rowKey(row);
       if (!seen.has(key)) {
@@ -448,20 +601,27 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
     // Settlement "Value Date …" lines belong to the open purchase — never a new row.
     if (VALUE_DATE_LINE.test(rawLine)) {
       if (pending) {
-        const { amount } = extractAmountFromRest(
+        const { amount, flow } = extractAmountFromRest(
           rawLine.replace(VALUE_DATE_LINE, "").trim(),
         );
-        if (amount && !pending.amount) pending.amount = amount;
+        if (amount && !pending.amount) {
+          pending.amount = amount;
+          if (flow && !pending.flow) pending.flow = flow;
+        }
       }
       continue;
     }
 
     // Debit/Credit/Balance emitted on their own line before the date row.
     if (isMoneyOnlyLine(rawLine)) {
-      const { amount } = extractAmountFromRest(rawLine);
+      const { amount, flow } = extractAmountFromRest(rawLine);
       if (amount) {
-        if (pending && !pending.amount) pending.amount = amount;
-        else orphanAmount = amount;
+        if (pending && !pending.amount) {
+          pending.amount = amount;
+          if (flow && !pending.flow) pending.flow = flow;
+        } else {
+          orphan = { amount, flow };
+        }
       }
       continue;
     }
@@ -491,21 +651,28 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
 
     if (dateMatch) {
       flush();
-      const date = normalizeStatementDate(dateMatch[1]!, fallbackYear);
+      const date = normalizeStatementDate(dateMatch[1]!, {
+        period,
+        previousDate,
+        fallbackYear: previousDate ? Number(previousDate.slice(0, 4)) : period
+          ? Number(period.end.slice(0, 4))
+          : null,
+      });
       if (!date) {
         skipped += 1;
         continue;
       }
-      fallbackYear = Number(date.slice(0, 4));
+      previousDate = date;
 
-      const { amount, merchant } = extractAmountFromRest(restAfterDate);
+      const { amount, merchant, flow } = extractAmountFromRest(restAfterDate);
       pending = {
         line: i + 1,
         date,
         merchantParts: merchant ? [merchant] : [],
-        amount: amount ?? orphanAmount,
+        amount: amount ?? orphan?.amount ?? null,
+        flow: flow ?? orphan?.flow ?? null,
       };
-      orphanAmount = null;
+      orphan = null;
       continue;
     }
 
@@ -524,8 +691,11 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
       const moneyOnly = isMoneyOnlyLine(rawLine);
 
       if (moneyHits.length >= 1 && !pending.amount) {
-        const { amount, merchant } = extractAmountFromRest(rawLine);
-        if (amount) pending.amount = amount;
+        const { amount, merchant, flow } = extractAmountFromRest(rawLine);
+        if (amount) {
+          pending.amount = amount;
+          if (flow && !pending.flow) pending.flow = flow;
+        }
         if (
           merchant &&
           !VALUE_DATE_LINE.test(merchant) &&
@@ -550,6 +720,12 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
     );
   } else if (skipped > 0) {
     warnings.push(`Skipped ${skipped} incomplete, footer, or non-payment line(s).`);
+  }
+
+  if (period) {
+    warnings.unshift(
+      `Statement period ${period.start} → ${period.end} used to resolve dates without a year.`,
+    );
   }
 
   return { rows, skipped, warnings };
@@ -609,23 +785,35 @@ export function parseStatementCsv(text: string): ParseStatementResult {
 
   const rows: ParsedStatementRow[] = [];
   let skipped = 0;
+  const period = inferStatementPeriod(lines);
+  let previousDate: string | null = period?.start ?? null;
 
   for (let i = headerLineIdx + 1; i < lines.length; i++) {
     const cells = splitCsvLine(lines[i]!);
     const merchantRaw = (cells[merchantIdx] ?? "").trim();
-    const date = normalizeStatementDate(cells[dateIdx] ?? "");
-    const amount = resolveAmount(cells, amountIdx, debitIdx, creditIdx);
+    const date = normalizeStatementDate(cells[dateIdx] ?? "", {
+      period,
+      previousDate,
+      fallbackYear: previousDate
+        ? Number(previousDate.slice(0, 4))
+        : period
+          ? Number(period.end.slice(0, 4))
+          : null,
+    });
+    const resolved = resolveAmount(cells, amountIdx, debitIdx, creditIdx);
 
-    if (!merchantRaw || !date || !amount) {
+    if (!merchantRaw || !date || !resolved) {
       skipped += 1;
       continue;
     }
+    previousDate = date;
 
     rows.push({
       line: i + 1,
       merchantRaw,
-      amount,
+      amount: resolved.amount,
       date,
+      ...(resolved.flow ? { flow: resolved.flow } : {}),
     });
   }
 

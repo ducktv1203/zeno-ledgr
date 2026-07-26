@@ -29,9 +29,9 @@ export function StatStrip({
       note: `${statementCount} statement${statementCount === 1 ? "" : "s"}`,
     },
     {
-      label: "Total volume",
+      label: "Money out",
       value: `$${formatMoney(totalVolume)}`,
-      note: "sum of visible rows",
+      note: "spend + transfers out",
     },
     {
       label: "Subscriptions",

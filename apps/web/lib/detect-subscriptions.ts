@@ -436,6 +436,8 @@ export function detectSubscriptions(
   for (const row of rows) {
     const amount = parseAmount(row.amount);
     if (!(amount > 0) || !row.date) continue;
+    // Refunds / wages / money received are not subscription charges.
+    if (row.flow === "in") continue;
 
     const key = subscriptionKeyForRow(row);
     if (!key) continue;

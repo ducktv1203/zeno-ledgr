@@ -13,6 +13,7 @@ import {
 import { decryptLedgerPayload, encryptLedgerPayload } from "@/lib/crypto";
 import { isPlausiblePayment } from "@/lib/parse-statement";
 import { refineMerchant } from "@/lib/refiner";
+import { inferCashFlow } from "@/lib/spend-categories";
 import type { DecryptedLedgerRow, StatementRow } from "@/lib/types";
 
 const FETCH_PAGE = 200;
@@ -33,6 +34,11 @@ async function decodeEntries(
       continue;
     }
     const refined = refineMerchant(plaintext.merchantRaw, wiki);
+    const draft = {
+      merchantRaw: plaintext.merchantRaw,
+      merchantDisplay: refined.displayName,
+      flow: plaintext.flow,
+    };
     decoded.push({
       id: r.id,
       createdAt: r.created_at,
@@ -42,6 +48,8 @@ async function decodeEntries(
       amount: plaintext.amount,
       date: plaintext.date,
       statementId: r.statement_id ?? null,
+      // Older blobs omit flow — infer so refunds / wages aren't treated as spend.
+      flow: inferCashFlow(draft),
     });
   }
   return decoded;
@@ -87,9 +95,17 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
   }, [accessToken, encryptionActive, refreshStatements]);
 
   const addEntry = useCallback(
-    async (payload: { merchantRaw: string; amount: string; date: string }) => {
+    async (payload: {
+      merchantRaw: string;
+      amount: string;
+      date: string;
+      flow?: "in" | "out";
+    }) => {
       if (!accessToken || !encryptionActive) return;
-      const encrypted = await encryptLedgerPayload(payload);
+      const encrypted = await encryptLedgerPayload({
+        ...payload,
+        flow: payload.flow ?? "out",
+      });
       await apiIngest(accessToken, encrypted);
       await loadFirstPage();
     },
@@ -98,7 +114,12 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
 
   const addEntries = useCallback(
     async (
-      payloads: { merchantRaw: string; amount: string; date: string }[],
+      payloads: {
+        merchantRaw: string;
+        amount: string;
+        date: string;
+        flow?: "in" | "out";
+      }[],
       meta: { filename: string; pageCount?: number | null },
       onProgress?: (done: number, total: number) => void,
     ) => {

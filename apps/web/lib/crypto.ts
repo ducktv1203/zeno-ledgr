@@ -147,10 +147,15 @@ function requireKey(): CryptoKey {
   return sessionAesKey;
 }
 
+/** Money leaving the account vs money arriving (refunds, salary, transfers in). */
+export type CashFlow = "in" | "out";
+
 export type LedgerPlaintext = {
   merchantRaw: string;
   amount: string;
   date: string;
+  /** Omitted on older encrypted rows — inferred from the merchant text at read time. */
+  flow?: CashFlow;
 };
 
 /**

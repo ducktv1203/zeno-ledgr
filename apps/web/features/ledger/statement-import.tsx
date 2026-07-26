@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 
+import { FlowAmount } from "@/components/flow-amount";
 import { ErrorNote } from "@/components/section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import wiki from "@/data/merchant-wiki.json";
 import { formatCount, formatDate, formatMoney } from "@/lib/format";
 import { parseStatementFile, type ParsedStatementRow } from "@/lib/parse-statement";
 import { refineMerchant } from "@/lib/refiner";
+import { inferCashFlow } from "@/lib/spend-categories";
 import { cn } from "@/lib/utils";
 
 const PREVIEW_ROWS = 6;
@@ -242,7 +244,15 @@ export function StatementImport({ onImport }: Props) {
                 <span className="min-w-0 flex-1 truncate text-[13px]" title={row.merchantRaw}>
                   {refineMerchant(row.merchantRaw, wiki).displayName}
                 </span>
-                <span className="money shrink-0 text-[13px]">${formatMoney(row.amount)}</span>
+                <FlowAmount
+                  amount={row.amount}
+                  flow={inferCashFlow({
+                    merchantRaw: row.merchantRaw,
+                    merchantDisplay: refineMerchant(row.merchantRaw, wiki).displayName,
+                    flow: row.flow,
+                  })}
+                  className="shrink-0 text-[13px]"
+                />
                 <span className="money w-[92px] shrink-0 text-right text-[12px] text-muted-foreground">
                   {formatDate(row.date)}
                 </span>

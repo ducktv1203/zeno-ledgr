@@ -105,9 +105,8 @@ export function SpendChart({ rows, loading }: Props) {
     for (const row of rows) {
       const amount = Number.parseFloat(row.amount);
       if (!Number.isFinite(amount) || amount <= 0) continue;
-      // Keep the merchant chart focused on outflow — income skews the top.
-      const hay = `${row.merchantDisplay} ${row.merchantRaw}`;
-      if (/\b(direct\s*credit|salary|wage|payroll)\b/i.test(hay)) continue;
+      // Keep the merchant chart focused on outflow — money in skews the top.
+      if (row.flow === "in") continue;
       const name = row.merchantDisplay || row.merchantRaw;
       const existing = byMerchant.get(name);
       if (existing) {

@@ -19,6 +19,8 @@ export type StatementRow = {
   created_at: string;
 };
 
+import type { CashFlow } from "@/lib/crypto";
+
 export type DecryptedLedgerRow = {
   id: string;
   createdAt: string;
@@ -28,4 +30,6 @@ export type DecryptedLedgerRow = {
   amount: string;
   date: string;
   statementId: string | null;
+  /** in = refund / wage / transfer received — never counted as spend. */
+  flow: CashFlow;
 };

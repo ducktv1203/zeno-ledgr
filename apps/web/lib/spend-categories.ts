@@ -42,8 +42,8 @@ export const SPEND_CATEGORIES: SpendCategory[] = [
   { id: "shopping", label: "Shopping", hint: "Retail and marketplaces", kind: "spend" },
   { id: "utilities", label: "Bills & utilities", hint: "Power, water, rates", kind: "spend" },
   { id: "health", label: "Health", hint: "Pharmacy, medical, fitness", kind: "spend" },
-  { id: "transfers", label: "Transfers", hint: "People, payers, BNPL", kind: "transfer" },
-  { id: "income", label: "Income", hint: "Salary and credits in", kind: "income" },
+  { id: "transfers", label: "Transfers out", hint: "Sent to people, ATM, BNPL", kind: "transfer" },
+  { id: "income", label: "Money in", hint: "Salary, refunds, transfers received", kind: "income" },
   { id: "other", label: "Other", hint: "Uncategorised spend", kind: "spend" },
 ];
 
@@ -73,19 +73,34 @@ type Rule = { category: SpendCategoryId; match: RegExp };
  * First match wins. Keep specifics (Uber Eats, YouTube) ahead of broad tokens
  * (Uber, Google). Tuned for CommBank / AU merchant descriptors.
  */
+/** Text that almost always means money arrived (credits), not a purchase. */
+const MONEY_IN_HINT =
+  /\b(refund|reimburs|cashback|direct\s*credit|salary|wage|payroll|pay\s*centre|paycentre|employer|centrelink|ato\s*refund|interest\s*(credited|earned)|dividend|deposit\b|transfer\s*from|received\s*from|incoming|credit\s*from|payment\s*received|funds?\s*received)\b/i;
+
+/**
+ * When the statement row has no stored debit/credit flag (older imports),
+ * guess from the descriptor so refunds don't inflate spend.
+ */
+export function inferCashFlow(
+  row: Pick<DecryptedLedgerRow, "merchantRaw" | "merchantDisplay" | "flow">,
+): "in" | "out" {
+  if (row.flow === "in" || row.flow === "out") return row.flow;
+  const hay = `${row.merchantDisplay} ${row.merchantRaw}`;
+  return MONEY_IN_HINT.test(hay) ? "in" : "out";
+}
+
 const RULES: Rule[] = [
-  // Income first — Direct Credit salary should never land in Other.
+  // Money in — salary, refunds, transfers received (never "spend").
   {
     category: "income",
-    match:
-      /\b(direct\s*credit|salary|wage|payroll|pay\s*centre|paycentre|employer|centrelink|ato\s*refund|interest\s*(credited|earned)|dividend)\b/i,
+    match: MONEY_IN_HINT,
   },
 
-  // Transfers / BNPL / cash movement
+  // Money sent elsewhere / cash out — not grocery spend, but also not "in".
   {
     category: "transfers",
     match:
-      /\b(osko|payid|transfer\s*to|transfer\s*from|tfr\b|netbank\s*transfer|commbank\s*app|afterpay|zip\s*pay|zipmoney|klarna|humm\b|atm\b|withdraw|cash\s*out)\b/i,
+      /\b(osko|payid|transfer\s*to|tfr\s*to|netbank\s*transfer|commbank\s*app|afterpay|zip\s*pay|zipmoney|klarna|humm\b|atm\b|withdraw|cash\s*out)\b/i,
   },
 
   // Groceries
@@ -165,12 +180,14 @@ export function categorizePaymentByRules(
 }
 
 /**
- * Resolve category: user override → seed rules → other.
+ * Resolve category: money-in → Income; else user override → seed rules → other.
+ * Refunds and transfers received must never land in groceries / other spend.
  */
 export function categorizePayment(
-  row: Pick<DecryptedLedgerRow, "merchantRaw" | "merchantDisplay">,
+  row: Pick<DecryptedLedgerRow, "merchantRaw" | "merchantDisplay" | "flow">,
   overrides?: ReadonlyMap<string, SpendCategoryId> | null,
 ): SpendCategoryId {
+  if (inferCashFlow(row) === "in") return "income";
   const key = categoryMerchantKey(row);
   const overridden = overrides?.get(key);
   if (overridden) return overridden;

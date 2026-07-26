@@ -73,6 +73,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   const totalVolume = useMemo(
     () =>
       visibleRows.reduce((sum, row) => {
+        if (row.flow === "in") return sum;
         const amount = Number.parseFloat(row.amount);
         return sum + (Number.isFinite(amount) ? amount : 0);
       }, 0),

@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 
+import { FlowAmount } from "@/components/flow-amount";
 import { EmptyNote } from "@/components/section";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatCount, formatDate, formatMoney } from "@/lib/format";
+import { formatCount, formatDate } from "@/lib/format";
 import { cleanMerchantLabel } from "@/lib/merchant-label";
 import {
   usePreferences,
@@ -473,7 +474,11 @@ export function PaymentsTable({ rows, loading, onDelete }: Props) {
                   {formatDate(row.date)}
                 </p>
               </div>
-              <span className="money shrink-0 text-[14px]">${formatMoney(row.amount)}</span>
+              <FlowAmount
+                amount={row.amount}
+                flow={row.flow}
+                className="shrink-0 text-[14px]"
+              />
             </li>
           ))}
         </ul>
@@ -523,11 +528,15 @@ export function PaymentsTable({ rows, loading, onDelete }: Props) {
                 </TableCell>
                 <TableCell
                   className={cn(
-                    "money whitespace-nowrap text-right text-[14px]",
-                    dense && "py-1.5 text-[12.5px]",
+                    "whitespace-nowrap text-right",
+                    dense && "py-1.5",
                   )}
                 >
-                  ${formatMoney(row.amount)}
+                  <FlowAmount
+                    amount={row.amount}
+                    flow={row.flow}
+                    className={cn("text-[14px]", dense && "text-[12.5px]")}
+                  />
                 </TableCell>
                 <TableCell
                   className={cn(
