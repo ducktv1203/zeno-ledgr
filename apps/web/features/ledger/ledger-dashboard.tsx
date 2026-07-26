@@ -16,6 +16,7 @@ import { SubscriptionsPanel } from "@/features/ledger/subscriptions-panel";
 import { VaultPanel } from "@/features/ledger/vault-panel";
 import { useLedger } from "@/features/ledger/use-ledger";
 import { clearSessionCrypto, unlockWithPassword } from "@/lib/crypto";
+import { useSubscriptionOverrides } from "@/lib/subscription-overrides";
 import { useCryptoUnlocked } from "@/lib/use-crypto-status";
 import {
   detectSubscriptions,
@@ -40,6 +41,7 @@ function monthlyEquivalent(subscriptions: DetectedSubscription[]): number {
 export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   // Sourced from the crypto module so an idle auto-lock closes the book too.
   const encryptionActive = useCryptoUnlocked();
+  const { dismissed } = useSubscriptionOverrides();
   const [activeStatementId, setActiveStatementId] = useState<string | null>(null);
   const [selectedSub, setSelectedSub] = useState<DetectedSubscription | null>(null);
 
@@ -77,6 +79,13 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   );
 
   const subscriptions = useMemo(() => detectSubscriptions(ledger.rows), [ledger.rows]);
+
+  // Headline figures describe what is still billing — lapsed recurrences and
+  // anything the user struck off are counted nowhere.
+  const billingNow = useMemo(
+    () => subscriptions.filter((sub) => sub.status === "active" && !dismissed.has(sub.key)),
+    [subscriptions, dismissed],
+  );
 
   const manualCount = useMemo(
     () => ledger.rows.filter((row) => !row.statementId).length,
@@ -125,8 +134,8 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         <StatStrip
           paymentCount={visibleRows.length}
           totalVolume={totalVolume}
-          subscriptionCount={subscriptions.length}
-          monthlyRecurring={monthlyEquivalent(subscriptions)}
+          subscriptionCount={billingNow.length}
+          monthlyRecurring={monthlyEquivalent(billingNow)}
           statementCount={ledger.statements.length}
         />
       </div>
@@ -135,12 +144,10 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         className="rise rise-2"
         eyebrow="Recurring"
         title="Subscriptions and what is due next"
-        description="Cadence is inferred from your statements and rolled forward into the current cycle, so a next due date is never stranded in the past. Pick a row or a marked day to see every charge behind it."
+        description="A merchant becomes a subscription once it bills a steady amount on a steady cycle, and stops being one once it goes quiet for several cycles. Pick a row or a marked day to see every charge behind it, or strike one off if we read it wrong."
         aside={
-          subscriptions.length > 0 ? (
-            <Badge variant="outline">
-              {subscriptions.length} tracked
-            </Badge>
+          billingNow.length > 0 ? (
+            <Badge variant="outline">{billingNow.length} billing</Badge>
           ) : null
         }
       >

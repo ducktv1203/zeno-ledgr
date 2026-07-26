@@ -9,11 +9,25 @@ export type SubscriptionCadence =
   | "yearly"
   | "unknown";
 
+/**
+ * `active` still bills on schedule; `lapsed` stopped long enough ago that the
+ * recurrence is over — a service used for a few months last year, not a
+ * standing charge to plan around.
+ */
+export type SubscriptionStatus = "active" | "lapsed";
+
 export type DetectedSubscription = {
+  /** Stable across reloads — used to remember what the user dismissed. */
+  key: string;
   service: string;
   amount: string;
   cadence: SubscriptionCadence;
   confidence: "high" | "medium" | "low";
+  status: SubscriptionStatus;
+  /** Whole cycles missed since the last charge. 0 while on schedule. */
+  cyclesMissed: number;
+  /** Days between the last charge and the end of the imported history. */
+  daysSinceLastCharge: number;
   chargeCount: number;
   firstPurchaseDate: string;
   lastChargeDate: string;
@@ -30,7 +44,20 @@ export type DetectedSubscription = {
 
 /** Merchants that are spending, not subscriptions — never list these here. */
 const NEVER_SUBSCRIPTION =
-  /\b(woolworths?|coles|aldi|iga|costco|afterpay?|zip\b|klarna|translink|queensland rail|citycat|ferry|uber\s*\*?trip|uber\s*eats|menulog|doordash|deliveroo|mcdonald|hungry jack|kfc|subway|bp\b|shell\b|7-eleven|7 eleven|parking|toll|atm\b|withdraw|transfer|osko|payid|salary|wage|payroll)\b/i;
+  /\b(woolworths?|coles|aldi|iga|costco|afterpay?|zip\b|klarna|translink|queensland rail|citycat|ferry|uber\s*\*?trip|uber\s*eats|menulog|doordash|deliveroo|mcdonald|hungry jack|kfc|subway|bp\b|shell\b|7-eleven|7 eleven|parking|toll|atm\b|withdraw|transfer|osko|payid|salary|wage|payroll|laundr\w*|laundromat|dry\s*clean|wash\s*(house|room|world|club)|restaurant|cafe|caf\u00e9|coffee|bakery|sushi|noodle|bar\s*&\s*grill|bottle\s*shop|liquor|pharmacy|chemist|hotel|motel|airbnb|qantas|jetstar|virgin\s*austral|taxi|cabcharge|bunnings|kmart|target|big\s*w|officeworks)\b/i;
+
+/**
+ * A charge only counts as recurring once the interval repeats this many times.
+ * Two visits a month apart is a coincidence; three on the same day of the
+ * month is a plan.
+ */
+const MIN_GENERIC_CHARGES = 3;
+
+/** Cycles that may be missed before the recurrence is considered finished. */
+const LAPSE_CYCLES = 2;
+
+/** Slack on top of the missed cycles, for statements that arrive late. */
+const LAPSE_GRACE_DAYS = 10;
 
 /**
  * Known subscription brands → canonical id + display name.
@@ -101,7 +128,8 @@ export function expectedDatesInRange(
   rangeStart: string,
   rangeEnd: string,
 ): string[] {
-  if (!sub.stepDays || !sub.lastChargeDate) return [];
+  // A lapsed recurrence has no next due, so it never reaches the calendar.
+  if (!sub.stepDays || !sub.lastChargeDate || !sub.nextExpectedDate) return [];
   const step = sub.stepDays;
   let cursor = sub.lastChargeDate;
   let guard = 0;
@@ -170,10 +198,41 @@ function gapDaysForCadence(c: SubscriptionCadence): number | null {
   }
 }
 
-function amountsClose(a: number, b: number): boolean {
+function amountsClose(a: number, b: number, relative: number, absolute: number): boolean {
   if (a === 0 && b === 0) return true;
   const diff = Math.abs(a - b);
-  return diff <= 0.51 || diff / Math.max(a, b) <= 0.08;
+  return diff <= absolute || diff / Math.max(a, b) <= relative;
+}
+
+function daysBetween(fromIso: string, toIso: string): number {
+  return Math.round((dayMs(toIso) - dayMs(fromIso)) / 86_400_000);
+}
+
+/**
+ * Subscriptions bill on the same day each month; the date drifts a little for
+ * weekends and short months, so allow a few days. Compared circularly so a
+ * plan billed on the 31st still matches the 1st.
+ */
+function billingDayAligned(dates: string[]): boolean {
+  const days = dates.map((iso) => Number(iso.slice(8, 10)));
+  const base = days[0]!;
+  return days.every((day) => {
+    const raw = Math.abs(day - base);
+    return Math.min(raw, 31 - raw) <= 3;
+  });
+}
+
+/**
+ * The end of the imported history, which is what staleness is measured
+ * against. Judging against today alone would mark every subscription lapsed
+ * whenever the whole ledger happens to be a few months old.
+ */
+export function dataHorizon(rows: { date: string }[], now: string = todayIso()): string {
+  let latest = "";
+  for (const row of rows) {
+    if (row.date && row.date > latest) latest = row.date;
+  }
+  return !latest || latest > now ? now : latest;
 }
 
 function resolveBrand(raw: string, display: string): { id: string; name: string } | null {
@@ -195,11 +254,38 @@ function genericKey(display: string, raw: string): string {
 }
 
 /**
+ * The bucket a row belongs to. Shared by detection and charge lookup so the
+ * two can never disagree about which charges back a subscription.
+ */
+export function subscriptionKeyForRow(row: DecryptedLedgerRow): string | null {
+  const hay = `${row.merchantRaw} ${row.merchantDisplay}`;
+  if (NEVER_SUBSCRIPTION.test(hay)) return null;
+
+  const brand = resolveBrand(row.merchantRaw, row.merchantDisplay);
+  if (brand) return `brand:${brand.id}`;
+
+  const generic = genericKey(row.merchantDisplay, row.merchantRaw);
+  return generic.length >= 3 ? `gen:${generic}` : null;
+}
+
+/**
  * Detect subscriptions only — not groceries, transit, Afterpay, one-off shops.
  * Known brands (YouTube/Netflix/…) are grouped across bank-string variants.
+ *
+ * Two questions decide every candidate:
+ *   1. Is the pattern actually a plan? Unknown merchants must repeat at least
+ *      three times, at an even interval, for the same amount, on the same
+ *      billing day. A laundry used twice one month apart fails all but the
+ *      first test.
+ *   2. Is it still running? A recurrence that stopped several cycles back is
+ *      reported as `lapsed` rather than projected into next month.
  */
-export function detectSubscriptions(rows: DecryptedLedgerRow[]): DetectedSubscription[] {
+export function detectSubscriptions(
+  rows: DecryptedLedgerRow[],
+  options: { asOf?: string } = {},
+): DetectedSubscription[] {
   type Bucket = {
+    key: string;
     service: string;
     knownBrand: boolean;
     amounts: number[];
@@ -207,19 +293,17 @@ export function detectSubscriptions(rows: DecryptedLedgerRow[]): DetectedSubscri
     raw: Set<string>;
   };
 
+  const asOf = options.asOf ?? dataHorizon(rows);
   const buckets = new Map<string, Bucket>();
 
   for (const row of rows) {
     const amount = parseAmount(row.amount);
     if (!(amount > 0) || !row.date) continue;
 
-    const hay = `${row.merchantRaw} ${row.merchantDisplay}`;
-    if (NEVER_SUBSCRIPTION.test(hay)) continue;
+    const key = subscriptionKeyForRow(row);
+    if (!key) continue;
 
     const brand = resolveBrand(row.merchantRaw, row.merchantDisplay);
-    const key = brand ? `brand:${brand.id}` : `gen:${genericKey(row.merchantDisplay, row.merchantRaw)}`;
-    if (!brand && key.length < 6) continue;
-
     const service = brand?.name ?? row.merchantDisplay ?? row.merchantRaw;
     const existing = buckets.get(key);
     if (existing) {
@@ -228,6 +312,7 @@ export function detectSubscriptions(rows: DecryptedLedgerRow[]): DetectedSubscri
       existing.raw.add(row.merchantRaw);
     } else {
       buckets.set(key, {
+        key,
         service,
         knownBrand: Boolean(brand),
         amounts: [amount],
@@ -241,49 +326,57 @@ export function detectSubscriptions(rows: DecryptedLedgerRow[]): DetectedSubscri
 
   for (const bucket of buckets.values()) {
     const chargeCount = bucket.amounts.length;
-    const dates = [...bucket.dates].sort();
-    const uniqueDates = [...new Set(dates)];
+    const uniqueDates = [...new Set(bucket.dates)].sort();
     const typicalAmount = median(bucket.amounts);
-    const amountStable = bucket.amounts.every((a) => amountsClose(a, typicalAmount));
+
+    // Real plans bill the same figure to the cent; brands get room for a price rise.
+    const amountsTight = bucket.amounts.every((a) => amountsClose(a, typicalAmount, 0.03, 0.25));
+    const amountsLoose = bucket.amounts.every((a) => amountsClose(a, typicalAmount, 0.12, 1));
 
     const gaps: number[] = [];
     for (let i = 1; i < uniqueDates.length; i++) {
-      const gap = Math.round((dayMs(uniqueDates[i]!) - dayMs(uniqueDates[i - 1]!)) / 86_400_000);
+      const gap = daysBetween(uniqueDates[i - 1]!, uniqueDates[i]!);
       if (gap > 0) gaps.push(gap);
     }
     const medGap = gaps.length ? median(gaps) : 0;
     const cadence = gaps.length ? cadenceFromGap(medGap) : "unknown";
-    const gapStable =
-      gaps.length > 0 && gaps.every((g) => Math.abs(g - medGap) <= Math.max(4, medGap * 0.25));
 
-    // Strict gate: unknown merchants need clear recurrence. Known brands need 2+ charges
-    // (or 1 charge only if we still want to hint — we require 2+ so groceries don't sneak in).
-    const recurring =
-      uniqueDates.length >= 2 && amountStable && cadence !== "unknown" && (gapStable || uniqueDates.length >= 3);
+    const gapsRegular =
+      gaps.length > 0 && gaps.every((g) => Math.abs(g - medGap) <= Math.max(3, medGap * 0.2));
+    const needsBillingDay =
+      cadence === "monthly" || cadence === "quarterly" || cadence === "yearly";
+    const aligned = !needsBillingDay || billingDayAligned(uniqueDates);
 
-    if (!bucket.knownBrand && !recurring) continue;
-    if (bucket.knownBrand && chargeCount < 2 && !recurring) continue;
-    if (!amountStable && !bucket.knownBrand) continue;
-    if (!bucket.knownBrand && cadence === "unknown") continue;
+    const qualifies = bucket.knownBrand
+      ? uniqueDates.length >= 2 && amountsLoose
+      : uniqueDates.length >= MIN_GENERIC_CHARGES &&
+        cadence !== "unknown" &&
+        gapsRegular &&
+        amountsTight &&
+        aligned;
+
+    if (!qualifies) continue;
 
     let confidence: DetectedSubscription["confidence"] = "low";
-    if (recurring && uniqueDates.length >= 3) confidence = "high";
-    else if (recurring) confidence = "medium";
-    else if (bucket.knownBrand && chargeCount >= 2 && amountStable) confidence = "medium";
-
-    // Drop low-confidence generic (non-brand) noise entirely.
-    if (!bucket.knownBrand && confidence === "low") continue;
+    if (uniqueDates.length >= 3 && gapsRegular && aligned) confidence = "high";
+    else if (uniqueDates.length >= 2 && (bucket.knownBrand || gapsRegular)) confidence = "medium";
 
     const resolvedCadence = cadence === "unknown" && bucket.knownBrand ? "monthly" : cadence;
     const step =
-      gapDaysForCadence(resolvedCadence) ??
-      (medGap > 0 ? Math.round(medGap) : bucket.knownBrand ? 30 : null);
+      gapDaysForCadence(resolvedCadence) ?? (medGap > 0 ? Math.round(medGap) : null);
     const last = uniqueDates[uniqueDates.length - 1]!;
 
+    const daysSinceLastCharge = Math.max(0, daysBetween(last, asOf));
+    const cyclesMissed = step ? Math.max(0, Math.floor(daysSinceLastCharge / step) - 1) : 0;
+    const lapsed =
+      step !== null && daysSinceLastCharge > step * LAPSE_CYCLES + LAPSE_GRACE_DAYS;
+
+    // A finished recurrence has no next due — projecting one would put a
+    // service you stopped using back on the calendar.
     let nextExpectedDate: string | null = null;
     let currentPeriodStart: string | null = null;
     let currentPeriodEnd: string | null = null;
-    if (step && (chargeCount >= 2 || bucket.knownBrand)) {
+    if (step && !lapsed) {
       const rolled = rollForwardExpected(last, step);
       nextExpectedDate = rolled.nextDue;
       currentPeriodStart = rolled.periodStart;
@@ -291,10 +384,14 @@ export function detectSubscriptions(rows: DecryptedLedgerRow[]): DetectedSubscri
     }
 
     out.push({
+      key: bucket.key,
       service: bucket.service,
       amount: typicalAmount.toFixed(2),
       cadence: resolvedCadence,
       confidence,
+      status: lapsed ? "lapsed" : "active",
+      cyclesMissed,
+      daysSinceLastCharge,
       chargeCount,
       firstPurchaseDate: uniqueDates[0]!,
       lastChargeDate: last,
@@ -307,6 +404,7 @@ export function detectSubscriptions(rows: DecryptedLedgerRow[]): DetectedSubscri
   }
 
   return out.sort((a, b) => {
+    if (a.status !== b.status) return a.status === "active" ? -1 : 1;
     const rank = { high: 0, medium: 1, low: 2 } as const;
     if (rank[a.confidence] !== rank[b.confidence]) return rank[a.confidence] - rank[b.confidence];
     return b.chargeCount - a.chargeCount;
@@ -318,15 +416,8 @@ export function rowsForSubscription(
   sub: DetectedSubscription,
   rows: DecryptedLedgerRow[],
 ): DecryptedLedgerRow[] {
-  const raw = new Set(sub.rawMerchants.map((r) => r.toLowerCase()));
-  const service = sub.service.toLowerCase();
   return rows
-    .filter(
-      (r) =>
-        raw.has(r.merchantRaw.toLowerCase()) ||
-        r.merchantDisplay.toLowerCase() === service ||
-        r.merchantRaw.toLowerCase().includes(service),
-    )
+    .filter((row) => subscriptionKeyForRow(row) === sub.key)
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 

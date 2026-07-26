@@ -53,10 +53,17 @@ export function EmptyNote({
   return (
     <div
       className={cn(
-        "ledger-rules rounded border border-dashed border-border bg-background/40 px-4 py-6",
+        // Ruled paper belongs behind display type. At body size its 28px rhythm
+        // strikes a line through every line of prose, so this uses the ledger's
+        // other motif: the red margin rule down the left.
+        "relative rounded border border-dashed border-border bg-background/40 px-4 py-5 sm:pl-[4.5rem]",
         className,
       )}
     >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-[3.25rem] hidden w-px bg-oxblood/20 sm:block"
+      />
       <p className="max-w-prose text-[13px] leading-relaxed text-muted-foreground">{children}</p>
     </div>
   );

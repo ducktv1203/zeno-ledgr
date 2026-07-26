@@ -264,7 +264,18 @@ export function PaymentsTable({ rows, loading }: Props) {
 
       {sorted.length === 0 ? (
         <EmptyNote>
-          Nothing matches those terms. Widen the search or clear the filters.
+          Nothing matches those terms.{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setQuery("");
+              setFilters(NO_FILTERS);
+            }}
+            className="link-underline text-foreground"
+          >
+            Clear the search and filters
+          </button>{" "}
+          to see all {formatCount(rows.length)} payments again.
         </EmptyNote>
       ) : view === "list" ? (
         <ul className="divide-y divide-border border-y border-border">
