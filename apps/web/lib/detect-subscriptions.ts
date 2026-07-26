@@ -1,3 +1,4 @@
+import { dateToIsoLocal, isoToLocalDate, todayIso } from "@/lib/dates";
 import type { DecryptedLedgerRow } from "@/lib/types";
 
 export type SubscriptionCadence =
@@ -71,26 +72,7 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function todayIso(now = new Date()): string {
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-/** Local calendar date as YYYY-MM-DD (matches DayPicker day cells). */
-export function dateToIsoLocal(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-/** Parse YYYY-MM-DD into a local Date at noon (stable for DayPicker matching). */
-export function isoToLocalDate(iso: string): Date {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y!, (m ?? 1) - 1, d ?? 1, 12, 0, 0, 0);
-}
+export { dateToIsoLocal, isoToLocalDate, todayIso };
 
 /**
  * Walk the recurrence forward from the last known charge until the next due

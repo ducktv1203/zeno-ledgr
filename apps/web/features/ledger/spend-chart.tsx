@@ -19,6 +19,13 @@ import type { DecryptedLedgerRow } from "@/lib/types";
 import { useTheme } from "@/lib/use-theme";
 
 const TOP_N = 8;
+const ROW_HEIGHT = 34;
+/** The axis gutter only fits so much; longer names get an ellipsis and a tooltip. */
+const LABEL_MAX_CHARS = 22;
+
+function truncateLabel(value: string): string {
+  return value.length > LABEL_MAX_CHARS ? `${value.slice(0, LABEL_MAX_CHARS - 1).trimEnd()}…` : value;
+}
 
 /*
  * Recharts writes these straight into SVG presentation attributes, where
@@ -84,16 +91,18 @@ export function SpendChart({ rows, loading }: Props) {
   }
 
   return (
-    <div className="h-[280px] w-full">
+    <div className="w-full" style={{ height: data.length * ROW_HEIGHT + 16 }}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 56, bottom: 4, left: 0 }}>
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 64, bottom: 4, left: 0 }}>
           <XAxis type="number" hide />
           <YAxis
             type="category"
             dataKey="name"
-            width={132}
+            width={168}
             tickLine={false}
             axisLine={false}
+            interval={0}
+            tickFormatter={truncateLabel}
             tick={{ fontSize: 12, fill: palette.axisText }}
           />
           <Tooltip

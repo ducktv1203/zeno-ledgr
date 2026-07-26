@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
  */
 
 type SectionProps = React.HTMLAttributes<HTMLElement> & {
-  index?: string;
   eyebrow?: string;
   title: string;
   description?: React.ReactNode;
@@ -17,7 +16,6 @@ type SectionProps = React.HTMLAttributes<HTMLElement> & {
 };
 
 export function Section({
-  index,
   eyebrow,
   title,
   description,
@@ -30,13 +28,7 @@ export function Section({
     <section className={cn("panel overflow-hidden", className)} {...props}>
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border bg-secondary/40 px-5 py-4">
         <div className="min-w-0 space-y-1.5">
-          {index || eyebrow ? (
-            <p className="eyebrow flex items-center gap-2">
-              {index ? <span className="text-foreground/70">{index}</span> : null}
-              {index && eyebrow ? <span className="h-px w-4 bg-border" /> : null}
-              {eyebrow}
-            </p>
-          ) : null}
+          {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
           <h2 className="font-display text-[22px] leading-tight">{title}</h2>
           {description ? (
             <p className="max-w-prose text-[13px] leading-relaxed text-muted-foreground">
