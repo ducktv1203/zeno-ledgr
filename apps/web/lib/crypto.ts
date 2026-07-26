@@ -13,6 +13,18 @@ const SESSION_FLAG_KEY = "zeno_crypto_active";
 
 let sessionAesKey: CryptoKey | null = null;
 
+/** Lets the shell (nav badge) track lock state instead of sampling it once on mount. */
+const lockListeners = new Set<() => void>();
+
+export function subscribeToCryptoStatus(listener: () => void): () => void {
+  lockListeners.add(listener);
+  return () => lockListeners.delete(listener);
+}
+
+function notifyLockChange(): void {
+  for (const listener of lockListeners) listener();
+}
+
 export function isCryptoUnlocked(): boolean {
   return sessionAesKey !== null;
 }
@@ -34,6 +46,7 @@ export function readSessionFlag(): boolean {
 export function clearSessionCrypto(): void {
   sessionAesKey = null;
   setSessionFlag(false);
+  notifyLockChange();
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -124,6 +137,7 @@ export async function unlockWithPassword(
   const salt = parseSaltBase64(saltBase64);
   sessionAesKey = await deriveKeyFromPassword(password, salt);
   setSessionFlag(true);
+  notifyLockChange();
 }
 
 function requireKey(): CryptoKey {

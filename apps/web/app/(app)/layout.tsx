@@ -8,8 +8,9 @@ import { LogOut } from "lucide-react";
 import { SecurityStatusBadge } from "@/components/security-status-badge";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
-import { clearSessionCrypto, isCryptoUnlocked } from "@/lib/crypto";
+import { clearSessionCrypto } from "@/lib/crypto";
 import { useAuthClient } from "@/features/auth/use-auth";
+import { useCryptoUnlocked } from "@/lib/use-crypto-status";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -23,7 +24,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = useAuthClient();
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
-  const [cryptoActive, setCryptoActive] = useState(false);
+  const cryptoActive = useCryptoUnlocked();
 
   useEffect(() => {
     if (!supabase) {
@@ -35,7 +36,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       setAuthed(ok);
       setReady(true);
       if (!ok) router.push("/signin");
-      setCryptoActive(isCryptoUnlocked());
     });
   }, [router, supabase]);
 

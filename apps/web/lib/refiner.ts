@@ -1,3 +1,5 @@
+import { cleanMerchantLabel } from "@/lib/merchant-label";
+
 export type MerchantWikiEntry = {
   /** Plain substring (case-insensitive) or /body/flags RegExp */
   pattern: string;
@@ -42,5 +44,7 @@ export function refineMerchant(
     }
   }
 
-  return { displayName: trimmed, matched: false };
+  // No wiki hit: strip the bank's scaffolding so the raw descriptor is at least readable.
+  const cleaned = cleanMerchantLabel(trimmed);
+  return { displayName: cleaned || trimmed, matched: false };
 }

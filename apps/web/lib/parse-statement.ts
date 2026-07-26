@@ -305,7 +305,11 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
 
   function flush() {
     if (!pending) return;
-    const merchantRaw = pending.merchantParts
+    // Wrapped PDF rows often repeat the descriptor verbatim on the next line.
+    const uniqueParts = pending.merchantParts.filter(
+      (part, i, all) => all.findIndex((p) => p.toLowerCase() === part.toLowerCase()) === i,
+    );
+    const merchantRaw = uniqueParts
       .join(" ")
       .replace(/\s+/g, " ")
       .trim()
