@@ -398,9 +398,13 @@ export function formatCadence(
   if (stepDays && stepDays > 0) {
     if (stepDays === 7) return "weekly";
     if (stepDays === 14) return "fortnightly";
-    if (stepDays === 30 || stepDays === 31) return "monthly";
+    // Prepaid telcos (Amaysim) renew on a true 28-day cycle — keep that label.
+    if (stepDays === 28) return "every 28 days";
+    if (stepDays >= 29 && stepDays <= 33) return "monthly";
     if (stepDays >= 90 && stepDays <= 92) return "quarterly";
     if (stepDays === 365 || stepDays === 366) return "yearly";
+    if (cadence === "monthly" && stepDays >= 25 && stepDays <= 36) return "monthly";
+    if (cadence !== "unknown") return cadence;
     return `every ${stepDays} days`;
   }
   if (cadence === "unknown") return "irregular";
@@ -438,6 +442,88 @@ function gapDaysForCadence(c: SubscriptionCadence): number | null {
     default:
       return null;
   }
+}
+
+const CADENCE_RANK: SubscriptionCadence[] = [
+  "weekly",
+  "fortnightly",
+  "monthly",
+  "quarterly",
+  "yearly",
+  "unknown",
+];
+
+type CycleInference = {
+  cadence: SubscriptionCadence;
+  /** Days between bills for scheduling — never a cancelled / paused stretch. */
+  stepDays: number | null;
+  /** Median of gaps that look like real billing cycles (lapses excluded). */
+  cycleGapDays: number | null;
+  /** True when the in-cycle gaps agree with each other. */
+  gapsRegular: boolean;
+};
+
+/**
+ * Infer plan length from consecutive-charge gaps, ignoring pauses.
+ *
+ * A statement that covers "paid → cancelled for months → paid again" produces
+ * a huge middle gap (Netflix ~335 days, YouTube ~46 after a missed cycle).
+ * That gap is not the plan — drop anything outside a known cadence bucket,
+ * vote on the rest, and keep the observed step inside that bucket (Amaysim 28).
+ */
+function inferBillingCycle(gaps: number[], knownBrand: boolean): CycleInference {
+  if (gaps.length === 0) {
+    return {
+      cadence: knownBrand ? "monthly" : "unknown",
+      stepDays: knownBrand ? 30 : null,
+      cycleGapDays: null,
+      gapsRegular: false,
+    };
+  }
+
+  const inCycle = gaps
+    .map((g) => ({ g, cadence: cadenceFromGap(g) }))
+    .filter((x) => x.cadence !== "unknown");
+
+  // e.g. a single 335-day Netflix gap — a pause, not a yearly plan.
+  if (inCycle.length === 0) {
+    return {
+      cadence: knownBrand ? "monthly" : "unknown",
+      stepDays: knownBrand ? 30 : null,
+      cycleGapDays: null,
+      gapsRegular: false,
+    };
+  }
+
+  const votes = new Map<SubscriptionCadence, number>();
+  for (const { cadence } of inCycle) {
+    votes.set(cadence, (votes.get(cadence) ?? 0) + 1);
+  }
+
+  let best: SubscriptionCadence = "monthly";
+  let bestCount = 0;
+  for (const [cadence, count] of votes) {
+    if (
+      count > bestCount ||
+      (count === bestCount && CADENCE_RANK.indexOf(cadence) < CADENCE_RANK.indexOf(best))
+    ) {
+      best = cadence;
+      bestCount = count;
+    }
+  }
+
+  const cycleGaps = inCycle.filter((x) => x.cadence === best).map((x) => x.g);
+  const cycleGapDays = Math.round(median(cycleGaps));
+  const gapsRegular = cycleGaps.every(
+    (g) => Math.abs(g - cycleGapDays) <= Math.max(3, cycleGapDays * 0.2),
+  );
+
+  return {
+    cadence: best,
+    stepDays: cycleGapDays,
+    cycleGapDays,
+    gapsRegular,
+  };
 }
 
 function amountsClose(a: number, b: number, relative: number, absolute: number): boolean {
@@ -632,11 +718,9 @@ export function detectSubscriptions(
         const gap = daysBetween(uniqueDates[i - 1]!, uniqueDates[i]!);
         if (gap > 0) gaps.push(gap);
       }
-      const medGap = gaps.length ? median(gaps) : 0;
-      const cadence = gaps.length ? cadenceFromGap(medGap) : "unknown";
-
-      const gapsRegular =
-        gaps.length > 0 && gaps.every((g) => Math.abs(g - medGap) <= Math.max(3, medGap * 0.2));
+      const cycle = inferBillingCycle(gaps, bucket.knownBrand);
+      const cadence = cycle.cadence;
+      const gapsRegular = cycle.gapsRegular;
       const needsBillingDay =
         cadence === "monthly" || cadence === "quarterly" || cadence === "yearly";
       const aligned = !needsBillingDay || billingDayAligned(uniqueDates);
@@ -656,7 +740,7 @@ export function detectSubscriptions(
       if (!isCandidate) continue;
 
       const strongEvidence = bucket.knownBrand
-        ? uniqueDates.length >= 2 && amountsLoose
+        ? uniqueDates.length >= 2 && amountsLoose && (gapsRegular || aligned || cycle.cycleGapDays != null)
         : uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && aligned && amountsTight;
 
       let confidence: DetectedSubscription["confidence"] = "low";
@@ -664,12 +748,11 @@ export function detectSubscriptions(
       else if (uniqueDates.length >= 2 && (bucket.knownBrand || gapsRegular)) confidence = "medium";
 
       const resolvedCadence = cadence === "unknown" && bucket.knownBrand ? "monthly" : cadence;
-      // Prefer the observed gap (Amaysim renews every 28 days, not calendar months).
-      // Even when we label the cycle "monthly", keep the measured step if we have one.
+      // Use the in-cycle step (Amaysim 28). Never average in a cancelled stretch.
       const step =
-        medGap > 0
-          ? Math.round(medGap)
-          : gapDaysForCadence(resolvedCadence) ?? (bucket.knownBrand ? 30 : null);
+        cycle.stepDays ??
+        gapDaysForCadence(resolvedCadence) ??
+        (bucket.knownBrand ? 30 : null);
       const last = uniqueDates[uniqueDates.length - 1]!;
 
       const daysSinceLastCharge = Math.max(0, daysBetween(last, asOf));
@@ -706,7 +789,7 @@ export function detectSubscriptions(
         confidence,
         status: reviewReason ? "review" : "active",
         reviewReason,
-        medianGapDays: medGap > 0 ? Math.round(medGap) : null,
+        medianGapDays: cycle.cycleGapDays,
         cyclesMissed,
         daysSinceLastCharge,
         chargeCount,
