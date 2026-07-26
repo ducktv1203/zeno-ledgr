@@ -65,9 +65,14 @@ function reviewNote(sub: DetectedSubscription): string {
     }`;
   }
   if (sub.reviewReason === "sparse") {
-    return `only ${sub.chargeCount} charges so far · ${formatDate(sub.firstPurchaseDate)} and ${formatDate(
-      sub.lastChargeDate,
-    )}`;
+    return sub.chargeCount === 1
+      ? `one charge so far, on ${formatDate(sub.lastChargeDate)}`
+      : `only ${sub.chargeCount} charges so far · ${formatDate(sub.firstPurchaseDate)} and ${formatDate(
+          sub.lastChargeDate,
+        )}`;
+  }
+  if (sub.reviewReason === "amount") {
+    return `${sub.chargeCount} charges on a steady cycle, but the amount changes each time · ${last}`;
   }
   return `${sub.chargeCount} charges, roughly every ${sub.medianGapDays ?? sub.stepDays} days, but the billing date wanders · ${last}`;
 }

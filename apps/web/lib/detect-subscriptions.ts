@@ -20,8 +20,10 @@ export type SubscriptionStatus = "active" | "review";
 export type ReviewReason =
   /** Billed on a cycle, then went quiet for several cycles. */
   | "stopped"
-  /** Only two charges so far — could be a plan, could be coincidence. */
+  /** Too few charges yet — could be a plan, could be coincidence. */
   | "sparse"
+  /** Repeats on time, but the charge is a different size each cycle. */
+  | "amount"
   /** Repeats, but the gaps or billing day wander more than a plan should. */
   | "irregular";
 
@@ -76,7 +78,18 @@ const LAPSE_GRACE_DAYS = 10;
  * Matching uses the raw bank string + display label.
  */
 const SUBSCRIPTION_BRANDS: { id: string; name: string; match: RegExp }[] = [
-  { id: "youtube", name: "YouTube", match: /youtube|yt\s*premium|google\s*\*?\s*youtu/i },
+  /*
+   * YouTube Premium is billed by Google, and banks truncate the product name
+   * aggressively. Google's own payments help lists `GOOGLE *GOOGLE` as the
+   * YouTube Premium descriptor — not a typo. Match that exact form, but do not
+   * steal `GOOGLE *Google Play` / Storage / Music / One.
+   */
+  {
+    id: "youtube",
+    name: "YouTube",
+    match:
+      /youtube|youtu\.?be|youtubeprem|yt\s*(premium|music|prem)|ytprem|google\s*\*?\s*youtu|\bgoogle\s*\*?\s*google(?:\s+(?:aus?|aud|sydney|melbourne|brisbane|perth|g\.co\S*))?\s*$/i,
+  },
   { id: "netflix", name: "Netflix", match: /netflix/i },
   { id: "spotify", name: "Spotify", match: /spotify/i },
   { id: "disney", name: "Disney+", match: /disney\+?|disneyplus/i },
@@ -87,14 +100,34 @@ const SUBSCRIPTION_BRANDS: { id: string; name: string; match: RegExp }[] = [
   { id: "google-one", name: "Google One", match: /google\s*one|google\s*\*?\s*storage/i },
   { id: "dropbox", name: "Dropbox", match: /dropbox/i },
   { id: "notion", name: "Notion", match: /notion/i },
-  { id: "openai", name: "OpenAI", match: /openai|chatgpt|claude\.ai/i },
+  { id: "openai", name: "OpenAI", match: /openai|chatgpt/i },
+  { id: "anthropic", name: "Claude", match: /anthropic|claude\.ai/i },
   { id: "github", name: "GitHub", match: /github/i },
   { id: "icloud", name: "iCloud", match: /icloud/i },
   { id: "stan", name: "Stan", match: /\bstan\b/i },
   { id: "binge", name: "Binge", match: /\bbinge\b/i },
+  { id: "kayo", name: "Kayo", match: /\bkayo\b/i },
+  { id: "paramount", name: "Paramount+", match: /paramount\s*\+?/i },
+  { id: "foxtel", name: "Foxtel", match: /foxtel/i },
+  { id: "audible", name: "Audible", match: /audible/i },
+  { id: "canva", name: "Canva", match: /\bcanva\b/i },
+  { id: "figma", name: "Figma", match: /\bfigma\b/i },
+  { id: "zoom", name: "Zoom", match: /\bzoom\.us\b|zoom\s*video/i },
+  { id: "patreon", name: "Patreon", match: /patreon/i },
+  { id: "twitch", name: "Twitch", match: /twitch/i },
+  { id: "playstation", name: "PlayStation", match: /playstation|\bpsn\b|sony\s*interactive/i },
+  { id: "nintendo", name: "Nintendo", match: /nintendo/i },
+  { id: "linkedin", name: "LinkedIn", match: /linkedin/i },
+  { id: "duolingo", name: "Duolingo", match: /duolingo/i },
+  { id: "strava", name: "Strava", match: /strava/i },
   { id: "optus", name: "Optus", match: /\boptus\b/i },
   { id: "telstra", name: "Telstra", match: /\btelstra\b/i },
   { id: "vodafone", name: "Vodafone", match: /vodafone/i },
+  { id: "amaysim", name: "Amaysim", match: /amaysim/i },
+  { id: "belong", name: "Belong", match: /\bbelong\b/i },
+  { id: "aussie-broadband", name: "Aussie Broadband", match: /aussie\s*broadband/i },
+  { id: "superloop", name: "Superloop", match: /superloop/i },
+  { id: "tpg", name: "TPG", match: /\btpg\b/i },
 ];
 
 function parseAmount(a: string): number {
@@ -423,17 +456,29 @@ export function detectSubscriptions(
       cadence === "monthly" || cadence === "quarterly" || cadence === "yearly";
     const aligned = !needsBillingDay || billingDayAligned(uniqueDates);
 
-    // Worth asking about at all? Two charges for a comparable amount on some
-    // recognisable cycle. Brands clear this bar on the strength of the name.
+    /*
+     * Worth asking about at all?
+     *
+     * A name we recognise is evidence in itself: nobody buys a single month of
+     * YouTube by accident. One charge is enough to raise the question, and a
+     * price rise between charges must not delete it either — both used to drop
+     * real subscriptions on the floor with nothing shown to the user.
+     *
+     * An unknown merchant has to earn it: either two charges for the same
+     * amount on a recognisable cycle, or three on an even cycle, which is
+     * structural enough to survive a change of price.
+     */
     const isCandidate = bucket.knownBrand
-      ? uniqueDates.length >= 2 && amountsLoose
-      : uniqueDates.length >= 2 && cadence !== "unknown" && amountsTight;
+      ? uniqueDates.length >= 1
+      : cadence !== "unknown" &&
+        ((uniqueDates.length >= 2 && amountsTight) ||
+          (uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && amountsLoose));
 
     if (!isCandidate) continue;
 
     const strongEvidence = bucket.knownBrand
-      ? uniqueDates.length >= 2
-      : uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && aligned;
+      ? uniqueDates.length >= 2 && amountsLoose
+      : uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && aligned && amountsTight;
 
     let confidence: DetectedSubscription["confidence"] = "low";
     if (uniqueDates.length >= 3 && gapsRegular && aligned) confidence = "high";
@@ -450,9 +495,14 @@ export function detectSubscriptions(
       step !== null && daysSinceLastCharge > step * LAPSE_CYCLES + LAPSE_GRACE_DAYS;
 
     // Staleness first: whether it stopped matters more than how it billed.
+    const enoughCharges = uniqueDates.length >= (bucket.knownBrand ? 2 : MIN_GENERIC_CHARGES);
     let reviewReason: ReviewReason | null = null;
     if (lapsed) reviewReason = "stopped";
-    else if (!strongEvidence) reviewReason = uniqueDates.length < 3 ? "sparse" : "irregular";
+    else if (!strongEvidence) {
+      if (!enoughCharges) reviewReason = "sparse";
+      else if (!amountsTight) reviewReason = "amount";
+      else reviewReason = "irregular";
+    }
 
     // Only the calendar-ready tier gets a projected due date. Anything under
     // review would otherwise put a guess on a day of the month.

@@ -3,6 +3,9 @@
   { "pattern": "GOOGLE*YOUTUBE", "displayName": "YouTube" },
   { "pattern": "GOOGLE *YOUTU", "displayName": "YouTube" },
   { "pattern": "YT PREMIUM", "displayName": "YouTube" },
+  { "pattern": "YTPREM", "displayName": "YouTube" },
+  { "pattern": "YOUTUBEPREM", "displayName": "YouTube" },
+  { "pattern": "/^google\\s*\\*?\\s*google(?:\\s+(?:aus?|aud|sydney|melbourne|brisbane|perth|g\\.co\\S*))?\\s*$/i", "displayName": "YouTube" },
   { "pattern": "NETFLIX", "displayName": "Netflix" },
   { "pattern": "SPOTIFY", "displayName": "Spotify" },
   { "pattern": "Adobe", "displayName": "Adobe" },
@@ -24,5 +27,8 @@
   { "pattern": "DISNEY", "displayName": "Disney+" },
   { "pattern": "APPLE.COM/BILL", "displayName": "Apple" },
   { "pattern": "MICROSOFT", "displayName": "Microsoft" },
-  { "pattern": "GOOGLE*Google", "displayName": "Google" }
+  { "pattern": "GOOGLE*Google Play", "displayName": "Google Play" },
+  { "pattern": "GOOGLE *Google Play", "displayName": "Google Play" },
+  { "pattern": "GOOGLE*Google Music", "displayName": "Google Music" },
+  { "pattern": "GOOGLE *Google Storage", "displayName": "Google One" }
 ]
