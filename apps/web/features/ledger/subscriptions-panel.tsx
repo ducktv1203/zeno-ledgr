@@ -1,11 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Ban, Check, RotateCcw, X } from "lucide-react";
+import { Ban, Check, Pencil, Plus, RotateCcw, X } from "lucide-react";
 
 import { EmptyNote } from "@/components/section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DateField } from "@/components/ui/date-field";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -16,8 +19,10 @@ import {
 } from "@/components/ui/table";
 import { SubscriptionCalendar } from "@/features/ledger/subscription-calendar";
 import {
+  formatCadence,
   formatPeriod,
   groupSubscriptions,
+  rollForwardExpected,
   todayIso,
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
@@ -33,6 +38,19 @@ type Props = {
   charges: DecryptedLedgerRow[];
   onSelect: (subscription: DetectedSubscription | null) => void;
 };
+
+const CADENCE_PRESETS: { label: string; stepDays: number }[] = [
+  { label: "Weekly", stepDays: 7 },
+  { label: "Fortnightly", stepDays: 14 },
+  { label: "Every 28 days", stepDays: 28 },
+  { label: "Monthly", stepDays: 30 },
+  { label: "Quarterly", stepDays: 91 },
+  { label: "Yearly", stepDays: 365 },
+];
+
+function isCustomKey(key: string): boolean {
+  return key.startsWith("custom:");
+}
 
 function daysUntil(iso: string | null): number | null {
   if (!iso) return null;
@@ -78,33 +96,101 @@ function reviewNote(sub: DetectedSubscription): string {
   return `${sub.chargeCount} charges, roughly every ${sub.medianGapDays ?? sub.stepDays} days, but the billing date wanders · ${last}`;
 }
 
+type EditorMode = { kind: "add" } | { kind: "edit"; sub: DetectedSubscription };
+
 export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect }: Props) {
-  const { dismissed, confirmed, dismiss, confirm, reset, resetAll } = useSubscriptionOverrides();
+  const {
+    dismissed,
+    confirmed,
+    schedules,
+    custom,
+    dismiss,
+    confirm,
+    reset,
+    resetAll,
+    setSchedule,
+    upsertCustom,
+    removeCustom,
+  } = useSubscriptionOverrides();
   const [showReview, setShowReview] = useState(true);
   const [showDismissed, setShowDismissed] = useState(false);
+  const [editor, setEditor] = useState<EditorMode | null>(null);
 
   const groups = useMemo(
-    () => groupSubscriptions(subscriptions, { dismissed, confirmed }),
-    [subscriptions, dismissed, confirmed],
+    () => groupSubscriptions(subscriptions, { dismissed, confirmed, schedules, custom }),
+    [subscriptions, dismissed, confirmed, schedules, custom],
   );
 
   function remove(sub: DetectedSubscription) {
-    dismiss(sub.key);
+    if (isCustomKey(sub.key)) removeCustom(sub.key);
+    else dismiss(sub.key);
     if (selected?.key === sub.key) onSelect(null);
+    if (editor?.kind === "edit" && editor.sub.key === sub.key) setEditor(null);
   }
 
-  if (subscriptions.length === 0) {
+  function saveEditor(values: {
+    service: string;
+    amount: string;
+    stepDays: number;
+    lastChargeDate: string;
+  }) {
+    if (editor?.kind === "edit" && isCustomKey(editor.sub.key)) {
+      upsertCustom({ key: editor.sub.key, ...values });
+    } else if (editor?.kind === "edit") {
+      setSchedule(editor.sub.key, {
+        service: values.service,
+        amount: values.amount,
+        stepDays: values.stepDays,
+        lastChargeDate: values.lastChargeDate,
+      });
+      if (editor.sub.status === "review") confirm(editor.sub.key);
+    } else {
+      upsertCustom({
+        key: `custom:${crypto.randomUUID()}`,
+        ...values,
+      });
+    }
+    setEditor(null);
+  }
+
+  const empty = subscriptions.length === 0 && custom.length === 0;
+
+  if (empty && !editor) {
     return (
-      <EmptyNote>
-        Nothing repeats yet. We look for the same merchant charging a steady amount on a steady
-        cycle — two charges are enough to raise a question here, three on the same day of the month
-        put it straight on the calendar.
-      </EmptyNote>
+      <div className="space-y-4">
+        <EmptyNote>
+          Nothing repeats yet. We look for the same merchant charging a steady amount on a steady
+          cycle — including odd ones like every 28 days. You can also add a subscription by hand.
+        </EmptyNote>
+        <Button type="button" size="sm" variant="outline" onClick={() => setEditor({ kind: "add" })}>
+          <Plus className="h-3.5 w-3.5" />
+          Add subscription
+        </Button>
+      </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-prose text-[12.5px] leading-relaxed text-muted-foreground">
+          Cadence uses the gap we actually see — Amaysim stays every 28 days, not “monthly”. Edit
+          previous due to recalculate the next bill, or add anything detection missed.
+        </p>
+        <Button type="button" size="sm" variant="outline" onClick={() => setEditor({ kind: "add" })}>
+          <Plus className="h-3.5 w-3.5" />
+          Add subscription
+        </Button>
+      </div>
+
+      {editor ? (
+        <SubscriptionEditor
+          mode={editor}
+          onCancel={() => setEditor(null)}
+          onSave={saveEditor}
+        />
+      ) : null}
+
       {groups.active.length > 0 ? (
         <SubscriptionCalendar
           subscriptions={groups.active}
@@ -127,8 +213,10 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
             subscriptions={groups.active}
             selected={selected}
             confirmed={confirmed}
+            schedules={schedules}
             onSelect={onSelect}
             onDismiss={remove}
+            onEdit={(sub) => setEditor({ kind: "edit", sub })}
           />
         </>
       ) : null}
@@ -152,13 +240,23 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
                     {sub.service}
                   </button>
                   <p className="money mt-1 text-[11.5px] text-muted-foreground">
-                    ${formatMoney(sub.amount)} {sub.cadence} · {reviewNote(sub)}
+                    ${formatMoney(sub.amount)} {formatCadence(sub.stepDays, sub.cadence)} ·{" "}
+                    {reviewNote(sub)}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1.5">
                   <Button type="button" size="sm" variant="outline" onClick={() => confirm(sub.key)}>
                     <Check className="h-3.5 w-3.5" />
                     Track it
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setEditor({ kind: "edit", sub })}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit
                   </Button>
                   <Button type="button" size="sm" variant="ghost" onClick={() => remove(sub)}>
                     <Ban className="h-3.5 w-3.5" />
@@ -194,7 +292,12 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
                   {sub.service}
                   <span className="money ml-2 text-[11.5px]">${formatMoney(sub.amount)}</span>
                 </span>
-                <Button type="button" size="sm" variant="ghost" onClick={() => reset(sub.key)}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => reset(sub.key)}
+                >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Restore
                 </Button>
@@ -211,18 +314,224 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
   );
 }
 
+function SubscriptionEditor({
+  mode,
+  onCancel,
+  onSave,
+}: {
+  mode: EditorMode;
+  onCancel: () => void;
+  onSave: (values: {
+    service: string;
+    amount: string;
+    stepDays: number;
+    lastChargeDate: string;
+  }) => void;
+}) {
+  const existing = mode.kind === "edit" ? mode.sub : null;
+  const [service, setService] = useState(existing?.service ?? "");
+  const [amount, setAmount] = useState(existing?.amount ?? "");
+  const [stepDays, setStepDays] = useState(existing?.stepDays ?? 30);
+  const [customStep, setCustomStep] = useState(
+    existing?.stepDays && !CADENCE_PRESETS.some((p) => p.stepDays === existing.stepDays)
+      ? String(existing.stepDays)
+      : "",
+  );
+  const [anchorMode, setAnchorMode] = useState<"previous" | "next">("previous");
+  const [previousDue, setPreviousDue] = useState(
+    existing?.lastChargeDate ?? todayIso(),
+  );
+  const [nextDue, setNextDue] = useState(existing?.nextExpectedDate ?? todayIso());
+
+  const resolvedStep =
+    customStep.trim() !== ""
+      ? Math.max(1, Math.round(Number.parseFloat(customStep) || stepDays))
+      : stepDays;
+
+  const previewNext =
+    resolvedStep > 0
+      ? rollForwardExpected(
+          anchorMode === "previous" ? previousDue : addDaysIso(nextDue, -resolvedStep),
+          resolvedStep,
+        ).nextDue
+      : null;
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const lastChargeDate =
+      anchorMode === "previous" ? previousDue : addDaysIso(nextDue, -resolvedStep);
+    onSave({
+      service: service.trim(),
+      amount: amount.trim(),
+      stepDays: resolvedStep,
+      lastChargeDate,
+    });
+  }
+
+  return (
+    <form onSubmit={submit} className="panel-flush space-y-4 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">{mode.kind === "add" ? "New subscription" : "Edit schedule"}</p>
+          <p className="mt-1 font-display text-xl leading-none">
+            {mode.kind === "add" ? "Add a plan" : existing?.service}
+          </p>
+        </div>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel} aria-label="Cancel">
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="sub-service">Name</Label>
+          <Input
+            id="sub-service"
+            value={service}
+            onChange={(e) => setService(e.target.value)}
+            placeholder="Amaysim"
+            required
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="sub-amount">Amount</Label>
+          <Input
+            id="sub-amount"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="35.00"
+            inputMode="decimal"
+            className="money"
+            required
+          />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label>Cadence</Label>
+        <div className="flex flex-wrap gap-1.5">
+          {CADENCE_PRESETS.map((preset) => {
+            const active = customStep === "" && stepDays === preset.stepDays;
+            return (
+              <button
+                key={preset.stepDays}
+                type="button"
+                onClick={() => {
+                  setStepDays(preset.stepDays);
+                  setCustomStep("");
+                }}
+                className={cn(
+                  "rounded border px-2.5 py-1 font-mono text-[10.5px] uppercase tracking-[0.12em] transition-colors",
+                  active
+                    ? "border-foreground/40 bg-ochre/15 text-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex max-w-[12rem] items-center gap-2 pt-1">
+          <Input
+            value={customStep}
+            onChange={(e) => setCustomStep(e.target.value)}
+            placeholder="Custom days"
+            inputMode="numeric"
+            className="money"
+            aria-label="Custom cadence in days"
+          />
+          <span className="shrink-0 text-[11.5px] text-muted-foreground">days</span>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => setAnchorMode("previous")}
+            className={cn(
+              "rounded border px-2.5 py-1 font-mono text-[10.5px] uppercase tracking-[0.12em] transition-colors",
+              anchorMode === "previous"
+                ? "border-foreground/40 bg-ochre/15 text-foreground"
+                : "border-border text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Previous due
+          </button>
+          <button
+            type="button"
+            onClick={() => setAnchorMode("next")}
+            className={cn(
+              "rounded border px-2.5 py-1 font-mono text-[10.5px] uppercase tracking-[0.12em] transition-colors",
+              anchorMode === "next"
+                ? "border-foreground/40 bg-ochre/15 text-foreground"
+                : "border-border text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Next due
+          </button>
+        </div>
+
+        {anchorMode === "previous" ? (
+          <div className="space-y-2">
+            <Label htmlFor="sub-previous">Previous due</Label>
+            <DateField id="sub-previous" value={previousDue} onChange={setPreviousDue} />
+            <p className="text-[12px] text-muted-foreground">
+              Next due calculates to{" "}
+              <span className="money text-foreground">{formatDate(previewNext)}</span>
+              {resolvedStep ? ` · ${formatCadence(resolvedStep)}` : ""}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Label htmlFor="sub-next">Next due</Label>
+            <DateField id="sub-next" value={nextDue} onChange={setNextDue} />
+            <p className="text-[12px] text-muted-foreground">
+              Previous due becomes{" "}
+              <span className="money text-foreground">
+                {formatDate(addDaysIso(nextDue, -resolvedStep))}
+              </span>
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" size="sm">
+          <Check className="h-3.5 w-3.5" />
+          {mode.kind === "add" ? "Add to calendar" : "Save schedule"}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function SubscriptionTable({
   subscriptions,
   selected,
   confirmed,
+  schedules,
   onSelect,
   onDismiss,
+  onEdit,
 }: {
   subscriptions: DetectedSubscription[];
   selected: DetectedSubscription | null;
   confirmed: Set<string>;
+  schedules: Record<string, unknown>;
   onSelect: (subscription: DetectedSubscription | null) => void;
   onDismiss: (subscription: DetectedSubscription) => void;
+  onEdit: (subscription: DetectedSubscription) => void;
 }) {
   return (
     <Table>
@@ -233,13 +542,14 @@ function SubscriptionTable({
           <TableHead>Cadence</TableHead>
           <TableHead>Current period</TableHead>
           <TableHead className="text-right">Next due</TableHead>
-          <TableHead className="w-8" />
+          <TableHead className="w-16" />
         </TableRow>
       </TableHeader>
       <TableBody>
         {subscriptions.map((sub) => {
           const open = selected?.key === sub.key;
           const days = daysUntil(sub.nextExpectedDate);
+          const edited = Boolean(schedules[sub.key]) || isCustomKey(sub.key);
           return (
             <TableRow
               key={sub.key}
@@ -250,7 +560,9 @@ function SubscriptionTable({
               <TableCell>
                 <div className="flex flex-wrap items-baseline gap-2">
                   <span className="font-display text-lg leading-none">{sub.service}</span>
-                  {confirmed.has(sub.key) ? (
+                  {isCustomKey(sub.key) ? (
+                    <Badge variant="ochre">Added by you</Badge>
+                  ) : confirmed.has(sub.key) ? (
                     <Badge
                       variant="ochre"
                       title={`You confirmed this one. Last charge on record: ${formatDate(
@@ -259,6 +571,8 @@ function SubscriptionTable({
                     >
                       Kept by you
                     </Badge>
+                  ) : edited ? (
+                    <Badge variant="ochre">Edited</Badge>
                   ) : sub.confidence === "high" ? (
                     <Badge variant="success">Confirmed</Badge>
                   ) : (
@@ -266,8 +580,11 @@ function SubscriptionTable({
                   )}
                 </div>
                 <p className="mt-1 text-[11.5px] text-muted-foreground">
-                  {sub.chargeCount} charge{sub.chargeCount === 1 ? "" : "s"} · since{" "}
-                  {formatDate(sub.firstPurchaseDate)}
+                  {sub.chargeCount > 0
+                    ? `${sub.chargeCount} charge${sub.chargeCount === 1 ? "" : "s"} · since ${formatDate(
+                        sub.firstPurchaseDate,
+                      )}`
+                    : `Previous due ${formatDate(sub.lastChargeDate)}`}
                   {sub.rawMerchants.length > 1
                     ? ` · ${sub.rawMerchants.length} bank labels merged`
                     : ""}
@@ -277,7 +594,7 @@ function SubscriptionTable({
                 ${formatMoney(sub.amount)}
               </TableCell>
               <TableCell className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                {sub.cadence}
+                {formatCadence(sub.stepDays, sub.cadence)}
               </TableCell>
               <TableCell className="whitespace-nowrap text-[12.5px] text-muted-foreground">
                 {formatPeriod(sub.currentPeriodStart, sub.currentPeriodEnd) ?? "—"}
@@ -296,18 +613,32 @@ function SubscriptionTable({
                 </div>
               </TableCell>
               <TableCell>
-                <button
-                  type="button"
-                  title="Not a subscription"
-                  aria-label={`${sub.service} is not a subscription`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDismiss(sub);
-                  }}
-                  className="text-muted-foreground/60 transition-colors hover:text-oxblood"
-                >
-                  <Ban className="h-3.5 w-3.5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    title="Edit schedule"
+                    aria-label={`Edit ${sub.service}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEdit(sub);
+                    }}
+                    className="text-muted-foreground/60 transition-colors hover:text-foreground"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Not a subscription"
+                    aria-label={`${sub.service} is not a subscription`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDismiss(sub);
+                    }}
+                    className="text-muted-foreground/60 transition-colors hover:text-oxblood"
+                  >
+                    <Ban className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </TableCell>
             </TableRow>
           );
@@ -383,7 +714,8 @@ function ChargeHistory({
           <p className="font-display text-xl leading-none">{subscription.service}</p>
           <p className="mt-1.5 text-[12.5px] text-muted-foreground">
             {charges.length} charge{charges.length === 1 ? "" : "s"} on record · $
-            {formatMoney(subscription.amount)} {subscription.cadence}
+            {formatMoney(subscription.amount)}{" "}
+            {formatCadence(subscription.stepDays, subscription.cadence)}
             {subscription.nextExpectedDate
               ? ` · next ${formatDate(subscription.nextExpectedDate)}`
               : ` · stopped ${monthsAgo(subscription.daysSinceLastCharge)}`}
@@ -400,29 +732,33 @@ function ChargeHistory({
         </Button>
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Merchant on statement</TableHead>
-            <TableHead className="text-right">Amount</TableHead>
-            <TableHead className="text-right">Date</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {charges.map((row) => (
-            <TableRow key={row.id}>
-              <TableCell className="max-w-[340px]">
-                <div className="font-medium">{row.merchantDisplay}</div>
-                <BankDescriptor raw={row.merchantRaw} display={row.merchantDisplay} />
-              </TableCell>
-              <TableCell className="money text-right">${formatMoney(row.amount)}</TableCell>
-              <TableCell className="money text-right text-muted-foreground">
-                {formatDate(row.date)}
-              </TableCell>
+      {charges.length === 0 ? (
+        <EmptyNote>No statement charges linked — this one was added by hand.</EmptyNote>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Merchant on statement</TableHead>
+              <TableHead className="text-right">Amount</TableHead>
+              <TableHead className="text-right">Date</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {charges.map((row) => (
+              <TableRow key={row.id}>
+                <TableCell className="max-w-[340px]">
+                  <div className="font-medium">{row.merchantDisplay}</div>
+                  <BankDescriptor raw={row.merchantRaw} display={row.merchantDisplay} />
+                </TableCell>
+                <TableCell className="money text-right">${formatMoney(row.amount)}</TableCell>
+                <TableCell className="money text-right text-muted-foreground">
+                  {formatDate(row.date)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
     </div>
   );
 }

@@ -120,7 +120,12 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
         date: string;
         flow?: "in" | "out";
       }[],
-      meta: { filename: string; pageCount?: number | null },
+      meta: {
+        filename: string;
+        pageCount?: number | null;
+        periodStart?: string | null;
+        periodEnd?: string | null;
+      },
       onProgress?: (done: number, total: number) => void,
     ) => {
       if (!accessToken || !encryptionActive || payloads.length === 0) {
@@ -130,6 +135,8 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
         filename: meta.filename,
         page_count: meta.pageCount ?? null,
         payment_count: payloads.length,
+        period_start: meta.periodStart ?? null,
+        period_end: meta.periodEnd ?? null,
       });
       let imported = 0;
       for (const payload of payloads) {

@@ -52,6 +52,8 @@ class CreateStatementBody(BaseModel):
     filename: str = Field(..., min_length=1, max_length=512)
     page_count: int | None = Field(default=None, ge=0, le=10_000)
     payment_count: int = Field(default=0, ge=0, le=100_000)
+    period_start: str | None = Field(default=None, max_length=10)
+    period_end: str | None = Field(default=None, max_length=10)
 
 
 class StatementRow(BaseModel):
@@ -59,6 +61,8 @@ class StatementRow(BaseModel):
     filename: str
     page_count: int | None
     payment_count: int
+    period_start: str | None = None
+    period_end: str | None = None
     created_at: str
 
 
@@ -71,9 +75,26 @@ class InitSaltResponse(BaseModel):
     created: bool
 
 
+def _iso_date(value: object) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()  # type: ignore[no-any-return]
+    text = str(value)
+    return text[:10] if text else None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await get_pool()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            ALTER TABLE public.statements
+              ADD COLUMN IF NOT EXISTS period_start DATE,
+              ADD COLUMN IF NOT EXISTS period_end DATE
+            """
+        )
     yield
     await close_pool()
 
@@ -152,7 +173,7 @@ async def list_statements(user_id: str = Depends(get_current_user_id)):
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, filename, page_count, payment_count, created_at
+            SELECT id, filename, page_count, payment_count, period_start, period_end, created_at
             FROM public.statements
             WHERE user_id = $1::uuid
             ORDER BY created_at DESC
@@ -165,6 +186,8 @@ async def list_statements(user_id: str = Depends(get_current_user_id)):
             filename=r["filename"],
             page_count=r["page_count"],
             payment_count=r["payment_count"],
+            period_start=_iso_date(r["period_start"]),
+            period_end=_iso_date(r["period_end"]),
             created_at=r["created_at"].isoformat(),
         )
         for r in rows
@@ -181,21 +204,27 @@ async def create_statement(
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO public.statements (id, user_id, filename, page_count, payment_count)
-            VALUES ($1, $2::uuid, $3, $4, $5)
-            RETURNING id, filename, page_count, payment_count, created_at
+            INSERT INTO public.statements (
+              id, user_id, filename, page_count, payment_count, period_start, period_end
+            )
+            VALUES ($1, $2::uuid, $3, $4, $5, $6::date, $7::date)
+            RETURNING id, filename, page_count, payment_count, period_start, period_end, created_at
             """,
             new_id,
             str(user_id),
             body.filename.strip()[:512],
             body.page_count,
             body.payment_count,
+            body.period_start,
+            body.period_end,
         )
     return StatementRow(
         id=row["id"],
         filename=row["filename"],
         page_count=row["page_count"],
         payment_count=row["payment_count"],
+        period_start=_iso_date(row["period_start"]),
+        period_end=_iso_date(row["period_end"]),
         created_at=row["created_at"].isoformat(),
     )
 

@@ -66,7 +66,13 @@ export async function apiEnsureSalt(
 
 export async function apiCreateStatement(
   token: string,
-  body: { filename: string; page_count?: number | null; payment_count: number },
+  body: {
+    filename: string;
+    page_count?: number | null;
+    payment_count: number;
+    period_start?: string | null;
+    period_end?: string | null;
+  },
 ): Promise<StatementRow> {
   return request("/statements", token, {
     method: "POST",

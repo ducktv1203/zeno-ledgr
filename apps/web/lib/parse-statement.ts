@@ -5,6 +5,13 @@ export type ParsedStatementRow = LedgerPlaintext & {
   line: number;
 };
 
+export type StatementPeriod = {
+  /** Inclusive ISO start (YYYY-MM-DD). */
+  start: string;
+  /** Inclusive ISO end (YYYY-MM-DD). */
+  end: string;
+};
+
 export type ParseStatementResult = {
   rows: ParsedStatementRow[];
   skipped: number;
@@ -12,6 +19,8 @@ export type ParseStatementResult = {
   usedOcr?: boolean;
   pageCount?: number;
   lineCount?: number;
+  /** Inclusive statement window when detected from the PDF/CSV header. */
+  period?: StatementPeriod | null;
 };
 
 export type { StatementReadProgress };
@@ -171,13 +180,6 @@ function ymd(y: number, m: number, d: number): string | null {
   if (m < 1 || m > 12 || d < 1 || d > 31) return null;
   return `${String(y).padStart(4, "0")}-${pad2(m)}-${pad2(d)}`;
 }
-
-export type StatementPeriod = {
-  /** Inclusive ISO start (YYYY-MM-DD). */
-  start: string;
-  /** Inclusive ISO end (YYYY-MM-DD). */
-  end: string;
-};
 
 export type DateResolveContext = {
   /** Last successfully parsed transaction date (ordering hint). */
@@ -728,7 +730,7 @@ export function parseStatementLines(lines: string[]): ParseStatementResult {
     );
   }
 
-  return { rows, skipped, warnings };
+  return { rows, skipped, warnings, period };
 }
 
 /**
@@ -823,7 +825,7 @@ export function parseStatementCsv(text: string): ParseStatementResult {
     warnings.push(`Skipped ${skipped} incomplete or unparseable row(s).`);
   }
 
-  return { rows, skipped, warnings };
+  return { rows, skipped, warnings, period };
 }
 
 export async function parseStatementFile(

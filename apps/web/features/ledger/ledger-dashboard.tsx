@@ -20,6 +20,7 @@ import { useSubscriptionOverrides } from "@/lib/subscription-overrides";
 import { useCryptoUnlocked } from "@/lib/use-crypto-status";
 import {
   detectSubscriptions,
+  formatPeriod,
   groupSubscriptions,
   rowsForSubscription,
   type DetectedSubscription,
@@ -42,7 +43,7 @@ function monthlyEquivalent(subscriptions: DetectedSubscription[]): number {
 export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   // Sourced from the crypto module so an idle auto-lock closes the book too.
   const encryptionActive = useCryptoUnlocked();
-  const { dismissed, confirmed } = useSubscriptionOverrides();
+  const { dismissed, confirmed, schedules, custom } = useSubscriptionOverrides();
   const [activeStatementId, setActiveStatementId] = useState<string | null>(null);
   const [selectedSub, setSelectedSub] = useState<DetectedSubscription | null>(null);
 
@@ -85,8 +86,8 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
   // Headline figures describe what is still billing: recurrences that went
   // quiet are left out until the user confirms they still pay for them.
   const billingNow = useMemo(
-    () => groupSubscriptions(subscriptions, { dismissed, confirmed }).active,
-    [subscriptions, dismissed, confirmed],
+    () => groupSubscriptions(subscriptions, { dismissed, confirmed, schedules, custom }).active,
+    [subscriptions, dismissed, confirmed, schedules, custom],
   );
 
   const manualCount = useMemo(
@@ -114,6 +115,16 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
           <h1 className="font-display text-4xl leading-tight sm:text-[2.75rem]">
             {activeStatement ? activeStatement.filename : "Everything on record"}
           </h1>
+          {activeStatement ? (
+            <p className="money text-[12.5px] text-muted-foreground">
+              {[
+                formatPeriod(activeStatement.period_start, activeStatement.period_end),
+                `${activeStatement.payment_count} payments`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          ) : null}
           {activeStatement ? (
             <button
               type="button"

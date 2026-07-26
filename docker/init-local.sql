@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS public.statements (
   filename TEXT NOT NULL,
   page_count INT,
   payment_count INT NOT NULL DEFAULT 0,
+  period_start DATE,
+  period_end DATE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

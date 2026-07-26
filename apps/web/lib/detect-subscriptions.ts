@@ -187,6 +187,101 @@ export function reviveSubscription(sub: DetectedSubscription): DetectedSubscript
   };
 }
 
+/**
+ * Apply a user schedule edit. Prefer previous due + step → roll next forward;
+ * if only next due is set, back out the previous due from that.
+ */
+export function applySchedulePatch(
+  sub: DetectedSubscription,
+  patch: {
+    service?: string;
+    amount?: string;
+    stepDays?: number;
+    cadence?: SubscriptionCadence;
+    lastChargeDate?: string;
+    nextExpectedDate?: string;
+  },
+): DetectedSubscription {
+  const stepDays = patch.stepDays ?? sub.stepDays;
+  const service = patch.service?.trim() || sub.service;
+  const amount = patch.amount?.trim() || sub.amount;
+  const cadence =
+    patch.cadence ??
+    (patch.stepDays != null ? cadenceFromGap(patch.stepDays) : sub.cadence);
+
+  let lastChargeDate = patch.lastChargeDate ?? sub.lastChargeDate;
+  let nextExpectedDate = sub.nextExpectedDate;
+  let currentPeriodStart = sub.currentPeriodStart;
+  let currentPeriodEnd = sub.currentPeriodEnd;
+
+  if (stepDays && stepDays > 0) {
+    if (patch.lastChargeDate) {
+      const rolled = rollForwardExpected(patch.lastChargeDate, stepDays);
+      lastChargeDate = patch.lastChargeDate;
+      nextExpectedDate = rolled.nextDue;
+      currentPeriodStart = rolled.periodStart;
+      currentPeriodEnd = rolled.periodEnd;
+    } else if (patch.nextExpectedDate) {
+      nextExpectedDate = patch.nextExpectedDate;
+      lastChargeDate = addDays(patch.nextExpectedDate, -stepDays);
+      currentPeriodStart = lastChargeDate;
+      currentPeriodEnd = addDays(patch.nextExpectedDate, -1);
+    } else if (lastChargeDate) {
+      const rolled = rollForwardExpected(lastChargeDate, stepDays);
+      nextExpectedDate = rolled.nextDue;
+      currentPeriodStart = rolled.periodStart;
+      currentPeriodEnd = rolled.periodEnd;
+    }
+  }
+
+  return {
+    ...sub,
+    service,
+    amount,
+    cadence: cadence === "unknown" && stepDays ? cadenceFromGap(stepDays) : cadence,
+    stepDays,
+    lastChargeDate,
+    nextExpectedDate,
+    currentPeriodStart,
+    currentPeriodEnd,
+    medianGapDays: stepDays ?? sub.medianGapDays,
+    status: "active",
+    reviewReason: null,
+  };
+}
+
+/** Build a DetectedSubscription from a manually added plan. */
+export function subscriptionFromCustom(input: {
+  key: string;
+  service: string;
+  amount: string;
+  stepDays: number;
+  lastChargeDate: string;
+}): DetectedSubscription {
+  const rolled = rollForwardExpected(input.lastChargeDate, input.stepDays);
+  const cadence = cadenceFromGap(input.stepDays);
+  return {
+    key: input.key,
+    service: input.service.trim(),
+    amount: input.amount.trim(),
+    cadence: cadence === "unknown" ? "unknown" : cadence,
+    confidence: "high",
+    status: "active",
+    reviewReason: null,
+    medianGapDays: input.stepDays,
+    cyclesMissed: 0,
+    daysSinceLastCharge: Math.max(0, daysBetween(input.lastChargeDate, todayIso())),
+    chargeCount: 0,
+    firstPurchaseDate: input.lastChargeDate,
+    lastChargeDate: input.lastChargeDate,
+    nextExpectedDate: rolled.nextDue,
+    currentPeriodStart: rolled.periodStart,
+    currentPeriodEnd: rolled.periodEnd,
+    stepDays: input.stepDays,
+    rawMerchants: [],
+  };
+}
+
 export type SubscriptionGroups = {
   /** Billing now — drives the calendar, the count and the monthly total. */
   active: DetectedSubscription[];
@@ -196,19 +291,56 @@ export type SubscriptionGroups = {
   removed: DetectedSubscription[];
 };
 
+export type SubscriptionOverrideInput = {
+  dismissed: Set<string>;
+  confirmed: Set<string>;
+  schedules?: Record<
+    string,
+    {
+      service?: string;
+      amount?: string;
+      stepDays?: number;
+      cadence?: SubscriptionCadence;
+      lastChargeDate?: string;
+      nextExpectedDate?: string;
+    }
+  >;
+  custom?: {
+    key: string;
+    service: string;
+    amount: string;
+    stepDays: number;
+    lastChargeDate: string;
+  }[];
+};
+
 /** Split detections by the detector's verdict and the user's, in that order. */
 export function groupSubscriptions(
   subscriptions: DetectedSubscription[],
-  overrides: { dismissed: Set<string>; confirmed: Set<string> },
+  overrides: SubscriptionOverrideInput,
 ): SubscriptionGroups {
   const groups: SubscriptionGroups = { active: [], review: [], removed: [] };
+  const schedules = overrides.schedules ?? {};
 
-  for (const sub of subscriptions) {
-    if (overrides.dismissed.has(sub.key)) groups.removed.push(sub);
-    else if (sub.status === "active") groups.active.push(sub);
-    else if (overrides.confirmed.has(sub.key)) groups.active.push(reviveSubscription(sub));
-    else groups.review.push(sub);
+  for (const raw of subscriptions) {
+    const patched = schedules[raw.key] ? applySchedulePatch(raw, schedules[raw.key]!) : raw;
+    if (overrides.dismissed.has(raw.key)) groups.removed.push(patched);
+    else if (patched.status === "active" || schedules[raw.key]) groups.active.push(patched);
+    else if (overrides.confirmed.has(raw.key)) groups.active.push(reviveSubscription(patched));
+    else groups.review.push(patched);
   }
+
+  for (const custom of overrides.custom ?? []) {
+    if (overrides.dismissed.has(custom.key)) {
+      groups.removed.push(subscriptionFromCustom(custom));
+      continue;
+    }
+    const base = subscriptionFromCustom(custom);
+    const patched = schedules[custom.key] ? applySchedulePatch(base, schedules[custom.key]!) : base;
+    groups.active.push(patched);
+  }
+
+  groups.active.sort((a, b) => (a.nextExpectedDate ?? "").localeCompare(b.nextExpectedDate ?? ""));
   return groups;
 }
 
@@ -253,6 +385,26 @@ export function formatPeriod(start: string | null, end: string | null): string |
     });
   };
   return `${fmt(start)} – ${fmt(end)}`;
+}
+
+/**
+ * Prefer the observed step (Amaysim = every 28 days) over a coarse label like
+ * "monthly". Named cadences only when the step matches the usual length.
+ */
+export function formatCadence(
+  stepDays: number | null | undefined,
+  cadence: SubscriptionCadence = "unknown",
+): string {
+  if (stepDays && stepDays > 0) {
+    if (stepDays === 7) return "weekly";
+    if (stepDays === 14) return "fortnightly";
+    if (stepDays === 30 || stepDays === 31) return "monthly";
+    if (stepDays >= 90 && stepDays <= 92) return "quarterly";
+    if (stepDays === 365 || stepDays === 366) return "yearly";
+    return `every ${stepDays} days`;
+  }
+  if (cadence === "unknown") return "irregular";
+  return cadence;
 }
 
 function median(nums: number[]): number {
@@ -512,9 +664,10 @@ export function detectSubscriptions(
       else if (uniqueDates.length >= 2 && (bucket.knownBrand || gapsRegular)) confidence = "medium";
 
       const resolvedCadence = cadence === "unknown" && bucket.knownBrand ? "monthly" : cadence;
-      // Prefer the observed gap (Amaysim renews every 28 days, not 30).
+      // Prefer the observed gap (Amaysim renews every 28 days, not calendar months).
+      // Even when we label the cycle "monthly", keep the measured step if we have one.
       const step =
-        medGap > 0 && cadence !== "unknown"
+        medGap > 0
           ? Math.round(medGap)
           : gapDaysForCadence(resolvedCadence) ?? (bucket.knownBrand ? 30 : null);
       const last = uniqueDates[uniqueDates.length - 1]!;

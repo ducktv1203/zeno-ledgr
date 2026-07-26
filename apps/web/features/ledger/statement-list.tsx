@@ -6,9 +6,14 @@ import { Eye, FileText, Layers, Trash2 } from "lucide-react";
 import { EmptyNote, ErrorNote } from "@/components/section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatPeriod } from "@/lib/detect-subscriptions";
 import { formatCount, formatTimestamp } from "@/lib/format";
 import type { StatementRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+function statementPeriodLabel(statement: StatementRow): string | null {
+  return formatPeriod(statement.period_start, statement.period_end);
+}
 
 type Props = {
   statements: StatementRow[];
@@ -76,7 +81,13 @@ export function StatementList({
             </p>
             <p className="money mt-0.5 text-[11.5px] text-muted-foreground">
               {active
-                ? `${formatCount(active.payment_count)} payments · imported ${formatTimestamp(active.created_at)}`
+                ? [
+                    statementPeriodLabel(active),
+                    `${formatCount(active.payment_count)} payments`,
+                    `imported ${formatTimestamp(active.created_at)}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
                 : `${formatCount(totalPayments)} payments across ${formatCount(statements.length)} statement${
                     statements.length === 1 ? "" : "s"
                   }${manualCount ? ` · ${formatCount(manualCount)} manual` : ""}`}
@@ -109,9 +120,14 @@ export function StatementList({
                   {i === 0 && !open ? <Badge variant="outline">Latest</Badge> : null}
                 </div>
                 <p className="money mt-1 text-[11.5px] text-muted-foreground">
-                  {formatCount(statement.payment_count)} payments
-                  {statement.page_count ? ` · ${formatCount(statement.page_count)} pages` : ""} ·{" "}
-                  {formatTimestamp(statement.created_at)}
+                  {[
+                    statementPeriodLabel(statement),
+                    `${formatCount(statement.payment_count)} payments`,
+                    statement.page_count ? `${formatCount(statement.page_count)} pages` : null,
+                    formatTimestamp(statement.created_at),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </p>
               </div>
 

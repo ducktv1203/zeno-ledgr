@@ -18,6 +18,7 @@ import { ErrorNote } from "@/components/section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import wiki from "@/data/merchant-wiki.json";
+import { formatPeriod } from "@/lib/detect-subscriptions";
 import { formatCount, formatDate, formatMoney } from "@/lib/format";
 import { parseStatementFile, type ParsedStatementRow } from "@/lib/parse-statement";
 import { refineMerchant } from "@/lib/refiner";
@@ -31,12 +32,19 @@ type PendingMeta = {
   filename: string;
   pageCount?: number;
   usedOcr?: boolean;
+  periodStart?: string | null;
+  periodEnd?: string | null;
 };
 
 type Props = {
   onImport: (
     rows: ParsedStatementRow[],
-    meta: { filename: string; pageCount?: number | null },
+    meta: {
+      filename: string;
+      pageCount?: number | null;
+      periodStart?: string | null;
+      periodEnd?: string | null;
+    },
     onProgress: (done: number, total: number) => void,
   ) => Promise<{ statementId: string | null }>;
 };
@@ -77,6 +85,8 @@ export function StatementImport({ onImport }: Props) {
         filename: file.name,
         pageCount: parsed.pageCount,
         usedOcr: parsed.usedOcr,
+        periodStart: parsed.period?.start ?? null,
+        periodEnd: parsed.period?.end ?? null,
       });
       if (parsed.rows.length === 0 && parsed.warnings.length === 0) {
         setError("No transactions found in that file.");
@@ -97,7 +107,12 @@ export function StatementImport({ onImport }: Props) {
     try {
       await onImport(
         pendingRows,
-        { filename: pendingMeta.filename, pageCount: pendingMeta.pageCount ?? null },
+        {
+          filename: pendingMeta.filename,
+          pageCount: pendingMeta.pageCount ?? null,
+          periodStart: pendingMeta.periodStart ?? null,
+          periodEnd: pendingMeta.periodEnd ?? null,
+        },
         (done, total) => setProgress({ done, total }),
       );
       reset();
@@ -231,7 +246,13 @@ export function StatementImport({ onImport }: Props) {
           <dl className="grid grid-cols-2 divide-x divide-border border-b border-border sm:grid-cols-4">
             <ReadStat label="Payments" value={formatCount(pendingRows.length)} />
             <ReadStat label="Total" value={`$${formatMoney(total)}`} />
-            <ReadStat label="Pages" value={pendingMeta?.pageCount ? formatCount(pendingMeta.pageCount) : "—"} />
+            <ReadStat
+              label="Period"
+              value={
+                formatPeriod(pendingMeta?.periodStart ?? null, pendingMeta?.periodEnd ?? null) ??
+                (pendingMeta?.pageCount ? `${formatCount(pendingMeta.pageCount)} pages` : "—")
+              }
+            />
             <ReadStat label="Earliest" value={formatDate(earliest)} />
           </dl>
 

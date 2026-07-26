@@ -16,6 +16,8 @@ export type StatementRow = {
   filename: string;
   page_count: number | null;
   payment_count: number;
+  period_start: string | null;
+  period_end: string | null;
   created_at: string;
 };
 
