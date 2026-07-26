@@ -11,7 +11,7 @@ import {
   todayIso,
   type DetectedSubscription,
 } from "@/lib/detect-subscriptions";
-import { formatMoney } from "@/lib/format";
+import { formatDayMonth, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type DayEvent = {
@@ -166,11 +166,7 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
 
       {/* Day detail rail */}
       <aside className="panel-flush h-fit p-4">
-        <p className="eyebrow">
-          {selected
-            ? selected.toLocaleDateString(undefined, { day: "numeric", month: "long" })
-            : "Pick a day"}
-        </p>
+        <p className="eyebrow">{selected ? formatDayMonth(selected) : "Pick a day"}</p>
 
         {selectedEvents.length === 0 ? (
           <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
@@ -203,7 +199,7 @@ export function SubscriptionCalendar({ subscriptions, onSelectService }: Props) 
         <p className="eyebrow mb-2.5">All recurring</p>
         <ul className="space-y-1.5">
           {subscriptions.map((sub) => (
-            <li key={sub.service}>
+            <li key={`${sub.service}-${sub.amount}`}>
               <button
                 type="button"
                 className="flex w-full items-baseline justify-between gap-3 text-left text-[12.5px] text-muted-foreground transition-colors hover:text-foreground"

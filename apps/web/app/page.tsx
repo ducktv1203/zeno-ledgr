@@ -80,7 +80,7 @@ export default function Home() {
           </div>
 
           {/* Specimen: what you see vs. what the server stores */}
-          <div className="panel ledger-margin overflow-hidden self-start">
+          <div className="panel self-start overflow-hidden">
             <div className="flex items-center justify-between border-b border-border bg-secondary/40 px-4 py-2.5">
               <span className="eyebrow">Statement excerpt</span>
               <span className="eyebrow text-oxblood">On this device</span>
@@ -89,7 +89,7 @@ export default function Home() {
               <tbody>
                 {SPECIMEN.map((row) => (
                   <tr key={row.merchant} className="border-b border-border/70">
-                    <td className="py-2.5 pl-16 pr-3 font-mono text-[11px] text-muted-foreground">
+                    <td className="py-2.5 pl-4 pr-3 font-mono text-[11px] text-muted-foreground">
                       {row.merchant}
                     </td>
                     <td className="py-2.5 pr-4 text-right font-mono text-[13px] tabular-nums">
@@ -108,7 +108,7 @@ export default function Home() {
               <tbody>
                 {SPECIMEN.map((row) => (
                   <tr key={row.cipher} className="border-b border-border/70 last:border-0">
-                    <td className="py-2.5 pl-16 pr-3 font-mono text-[11px] text-muted-foreground/60">
+                    <td className="py-2.5 pl-4 pr-3 font-mono text-[11px] text-muted-foreground/55">
                       {row.cipher}
                     </td>
                     <td className="py-2.5 pr-4 text-right font-mono text-[13px] text-muted-foreground/60">
@@ -124,7 +124,7 @@ export default function Home() {
         {/* Principles as numbered editorial entries */}
         <section className="rise rise-2 grid gap-px border-b border-border bg-border md:grid-cols-3">
           {PRINCIPLES.map((p) => (
-            <article key={p.n} className="bg-background px-1 py-10 md:px-6">
+            <article key={p.n} className="bg-background py-10 md:px-6 md:first:pl-0">
               <p className="font-display text-2xl text-oxblood">{p.n}</p>
               <h3 className="mt-3 text-base font-semibold tracking-normal">{p.title}</h3>
               <p className="mt-2 max-w-prose text-[13px] leading-relaxed text-muted-foreground">

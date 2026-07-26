@@ -5,6 +5,7 @@ import {
   Bar,
   BarChart,
   Cell,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -17,6 +18,15 @@ import { formatMoney } from "@/lib/format";
 import type { DecryptedLedgerRow } from "@/lib/types";
 
 const TOP_N = 8;
+
+/*
+ * Recharts writes these straight into SVG presentation attributes, where
+ * `var()` never resolves — so the theme colours are inlined here.
+ */
+const BAR_LEAD = "hsl(4, 65%, 38%)";
+const BAR_REST = "hsl(30, 13%, 9%)";
+const AXIS_TEXT = "hsl(33, 10%, 38%)";
+const CURSOR = "hsl(40, 30%, 87%)";
 
 type Props = {
   rows: DecryptedLedgerRow[];
@@ -67,10 +77,10 @@ export function SpendChart({ rows, loading }: Props) {
             width={132}
             tickLine={false}
             axisLine={false}
-            tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+            tick={{ fontSize: 12, fill: AXIS_TEXT }}
           />
           <Tooltip
-            cursor={{ fill: "hsl(var(--accent) / 0.5)" }}
+            cursor={{ fill: CURSOR, fillOpacity: 0.55 }}
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
               const slice = payload[0]!.payload as Slice;
@@ -85,13 +95,23 @@ export function SpendChart({ rows, loading }: Props) {
               );
             }}
           />
-          <Bar dataKey="total" radius={[0, 2, 2, 0]} barSize={16}>
+          <Bar dataKey="total" radius={[0, 2, 2, 0]} barSize={16} isAnimationActive={false}>
             {data.map((slice, i) => (
               <Cell
                 key={slice.name}
-                fill={i === 0 ? "hsl(var(--oxblood))" : "hsl(var(--foreground) / 0.28)"}
+                fill={i === 0 ? BAR_LEAD : BAR_REST}
+                fillOpacity={i === 0 ? 1 : 0.26}
               />
             ))}
+            <LabelList
+              dataKey="total"
+              position="right"
+              offset={8}
+              fill={AXIS_TEXT}
+              fontSize={11}
+              fontFamily="var(--font-mono)"
+              formatter={(value: number) => `$${formatMoney(value)}`}
+            />
           </Bar>
         </BarChart>
       </ResponsiveContainer>

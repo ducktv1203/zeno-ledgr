@@ -1,4 +1,4 @@
-import { formatMoney } from "@/lib/format";
+import { formatCount, formatMoney } from "@/lib/format";
 
 type Stat = {
   label: string;
@@ -25,7 +25,7 @@ export function StatStrip({
   const stats: Stat[] = [
     {
       label: "Payments",
-      value: paymentCount.toLocaleString(),
+      value: formatCount(paymentCount),
       note: `${statementCount} statement${statementCount === 1 ? "" : "s"}`,
     },
     {
@@ -35,7 +35,7 @@ export function StatStrip({
     },
     {
       label: "Subscriptions",
-      value: subscriptionCount.toLocaleString(),
+      value: formatCount(subscriptionCount),
       note: "recurring merchants",
     },
     {
@@ -49,7 +49,7 @@ export function StatStrip({
   return (
     <section className="grid gap-px border-y border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
       {stats.map((stat) => (
-        <div key={stat.label} className="bg-background px-1 py-5 lg:px-5 lg:first:pl-1">
+        <div key={stat.label} className="bg-background px-4 py-5 first:pl-0">
           <p className="eyebrow">{stat.label}</p>
           <p
             className={`figure mt-2.5 text-[2rem] leading-none ${

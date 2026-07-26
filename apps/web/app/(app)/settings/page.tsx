@@ -38,7 +38,7 @@ export default function SettingsPage() {
 
       <div className="grid gap-px border-y border-border bg-border md:grid-cols-3">
         {NOTES.map(({ icon: Icon, ...note }) => (
-          <article key={note.n} className="space-y-3 bg-background px-1 py-8 md:px-6">
+          <article key={note.n} className="space-y-3 bg-background py-8 md:px-6 md:first:pl-0">
             <div className="flex items-baseline justify-between gap-2">
               <p className="font-display text-2xl text-oxblood">{note.n}</p>
               <Icon className="h-4 w-4 text-muted-foreground" />
