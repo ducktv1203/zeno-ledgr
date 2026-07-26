@@ -92,6 +92,22 @@ export async function apiIngest(
   });
 }
 
+/** Server caps a single request at 5,000 ids. */
+const DELETE_BATCH = 2_000;
+
+export async function apiDeleteEntries(token: string, ids: string[]): Promise<number> {
+  let deleted = 0;
+  for (let i = 0; i < ids.length; i += DELETE_BATCH) {
+    const batch = ids.slice(i, i + DELETE_BATCH);
+    const result = await request<{ deleted: number }>("/entries/delete", token, {
+      method: "POST",
+      body: JSON.stringify({ ids: batch }),
+    });
+    deleted += result.deleted;
+  }
+  return deleted;
+}
+
 export async function apiRetrieve(
   token: string,
   params?: { limit?: number; cursor?: string | null; statement_id?: string | null },

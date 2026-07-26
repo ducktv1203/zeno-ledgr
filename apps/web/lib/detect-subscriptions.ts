@@ -10,11 +10,20 @@ export type SubscriptionCadence =
   | "unknown";
 
 /**
- * `active` still bills on schedule; `lapsed` stopped long enough ago that the
- * recurrence is over — a service used for a few months last year, not a
- * standing charge to plan around.
+ * `active` bills on a clear schedule and is safe to put on the calendar.
+ * `review` repeats enough to be worth asking about but not enough to assume —
+ * the evidence is thin, the dates wander, or it stopped a while back.
  */
-export type SubscriptionStatus = "active" | "lapsed";
+export type SubscriptionStatus = "active" | "review";
+
+/** Why a candidate is waiting on the user. Drives the wording of the prompt. */
+export type ReviewReason =
+  /** Billed on a cycle, then went quiet for several cycles. */
+  | "stopped"
+  /** Only two charges so far — could be a plan, could be coincidence. */
+  | "sparse"
+  /** Repeats, but the gaps or billing day wander more than a plan should. */
+  | "irregular";
 
 export type DetectedSubscription = {
   /** Stable across reloads — used to remember what the user dismissed. */
@@ -24,6 +33,9 @@ export type DetectedSubscription = {
   cadence: SubscriptionCadence;
   confidence: "high" | "medium" | "low";
   status: SubscriptionStatus;
+  reviewReason: ReviewReason | null;
+  /** Typical days between charges, as observed. */
+  medianGapDays: number | null;
   /** Whole cycles missed since the last charge. 0 while on schedule. */
   cyclesMissed: number;
   /** Days between the last charge and the end of the imported history. */
@@ -134,6 +146,7 @@ export function reviveSubscription(sub: DetectedSubscription): DetectedSubscript
   return {
     ...sub,
     status: "active",
+    reviewReason: null,
     nextExpectedDate: rolled.nextDue,
     currentPeriodStart: rolled.periodStart,
     currentPeriodEnd: rolled.periodEnd,
@@ -286,14 +299,28 @@ function resolveBrand(raw: string, display: string): { id: string; name: string 
   return null;
 }
 
+/**
+ * Bank descriptors for one merchant rarely match character for character:
+ * "Hanaro Toowong Pty Ltd", "Hanaro Toowong Store 4" and "Hanaro Toowong" are
+ * one shop. Keying on the first couple of meaningful words groups those while
+ * keeping "City Council Rates" apart from "City Council Parking".
+ */
+const KEY_WORDS = 2;
+
+/** Legal, retail and location padding that varies between charges. */
+const KEY_NOISE =
+  /^(pty|ltd|limited|inc|llc|corp|corporation|plc|co|group|holdings|store|shop|outlet|branch|au|aus|australia|nz|qld|nsw|vic|wa|sa|tas|act)$/;
+
 function genericKey(display: string, raw: string): string {
-  return (display || raw)
+  const words = (display || raw)
     .toLowerCase()
     .replace(/\*+[a-z0-9]+/gi, " ")
     .replace(/\b(p|ref|txn|id|au|nz)\d+\b/gi, " ")
     .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
+    .split(/\s+/)
+    .filter((word) => word && !/^\d+$/.test(word) && !KEY_NOISE.test(word));
+
+  return words.slice(0, KEY_WORDS).join(" ");
 }
 
 /**
@@ -315,13 +342,19 @@ export function subscriptionKeyForRow(row: DecryptedLedgerRow): string | null {
  * Detect subscriptions only — not groceries, transit, Afterpay, one-off shops.
  * Known brands (YouTube/Netflix/…) are grouped across bank-string variants.
  *
- * Two questions decide every candidate:
- *   1. Is the pattern actually a plan? Unknown merchants must repeat at least
- *      three times, at an even interval, for the same amount, on the same
- *      billing day. A laundry used twice one month apart fails all but the
- *      first test.
- *   2. Is it still running? A recurrence that stopped several cycles back is
- *      reported as `lapsed` rather than projected into next month.
+ * Candidates come out in two tiers rather than pass/fail, because silently
+ * dropping the near-misses leaves a ledger full of payments and an empty
+ * calendar with no explanation:
+ *
+ *   `active`  Strong evidence and still running — safe to schedule. An even
+ *             interval, a steady amount, the same billing day, three charges
+ *             deep (two for a brand we recognise).
+ *   `review`  Repeats, but something is short of proof: only two charges, a
+ *             wandering billing date, or a cycle that stopped a while ago.
+ *             These are put to the user as a question instead of a guess.
+ *
+ * Anything that never repeats, or whose amount is all over the place, is not
+ * a candidate at all.
  */
 export function detectSubscriptions(
   rows: DecryptedLedgerRow[],
@@ -390,15 +423,17 @@ export function detectSubscriptions(
       cadence === "monthly" || cadence === "quarterly" || cadence === "yearly";
     const aligned = !needsBillingDay || billingDayAligned(uniqueDates);
 
-    const qualifies = bucket.knownBrand
+    // Worth asking about at all? Two charges for a comparable amount on some
+    // recognisable cycle. Brands clear this bar on the strength of the name.
+    const isCandidate = bucket.knownBrand
       ? uniqueDates.length >= 2 && amountsLoose
-      : uniqueDates.length >= MIN_GENERIC_CHARGES &&
-        cadence !== "unknown" &&
-        gapsRegular &&
-        amountsTight &&
-        aligned;
+      : uniqueDates.length >= 2 && cadence !== "unknown" && amountsTight;
 
-    if (!qualifies) continue;
+    if (!isCandidate) continue;
+
+    const strongEvidence = bucket.knownBrand
+      ? uniqueDates.length >= 2
+      : uniqueDates.length >= MIN_GENERIC_CHARGES && gapsRegular && aligned;
 
     let confidence: DetectedSubscription["confidence"] = "low";
     if (uniqueDates.length >= 3 && gapsRegular && aligned) confidence = "high";
@@ -414,12 +449,17 @@ export function detectSubscriptions(
     const lapsed =
       step !== null && daysSinceLastCharge > step * LAPSE_CYCLES + LAPSE_GRACE_DAYS;
 
-    // A finished recurrence has no next due — projecting one would put a
-    // service you stopped using back on the calendar.
+    // Staleness first: whether it stopped matters more than how it billed.
+    let reviewReason: ReviewReason | null = null;
+    if (lapsed) reviewReason = "stopped";
+    else if (!strongEvidence) reviewReason = uniqueDates.length < 3 ? "sparse" : "irregular";
+
+    // Only the calendar-ready tier gets a projected due date. Anything under
+    // review would otherwise put a guess on a day of the month.
     let nextExpectedDate: string | null = null;
     let currentPeriodStart: string | null = null;
     let currentPeriodEnd: string | null = null;
-    if (step && !lapsed) {
+    if (step && !reviewReason) {
       const rolled = rollForwardExpected(last, step);
       nextExpectedDate = rolled.nextDue;
       currentPeriodStart = rolled.periodStart;
@@ -432,7 +472,9 @@ export function detectSubscriptions(
       amount: typicalAmount.toFixed(2),
       cadence: resolvedCadence,
       confidence,
-      status: lapsed ? "lapsed" : "active",
+      status: reviewReason ? "review" : "active",
+      reviewReason,
+      medianGapDays: medGap > 0 ? Math.round(medGap) : null,
       cyclesMissed,
       daysSinceLastCharge,
       chargeCount,

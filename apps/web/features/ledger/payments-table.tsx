@@ -11,11 +11,13 @@ import {
   Rows3,
   Search,
   Table2,
+  Trash2,
   X,
 } from "lucide-react";
 
 import { EmptyNote } from "@/components/section";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DateField } from "@/components/ui/date-field";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
@@ -69,18 +71,35 @@ const PAGE_SIZES: { value: PageSize; label: string }[] = [
   { value: "all", label: "All" },
 ];
 
+/** Where a row came from: a parsed statement, or typed in by hand. */
+type Source = "all" | "imported" | "manual";
+
+const SOURCES: { value: Source; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "imported", label: "Imported" },
+  { value: "manual", label: "Manual" },
+];
+
 type Filters = {
   minAmount: string;
   maxAmount: string;
   from: string;
   to: string;
+  source: Source;
 };
 
-const NO_FILTERS: Filters = { minAmount: "", maxAmount: "", from: "", to: "" };
+const NO_FILTERS: Filters = {
+  minAmount: "",
+  maxAmount: "",
+  from: "",
+  to: "",
+  source: "all",
+};
 
 type Props = {
   rows: DecryptedLedgerRow[];
   loading: boolean;
+  onDelete: (ids: string[]) => Promise<number>;
 };
 
 function compareRows(a: DecryptedLedgerRow, b: DecryptedLedgerRow, key: SortKey): number {
@@ -93,7 +112,7 @@ function compareRows(a: DecryptedLedgerRow, b: DecryptedLedgerRow, key: SortKey)
   return a.date.localeCompare(b.date);
 }
 
-export function PaymentsTable({ rows, loading }: Props) {
+export function PaymentsTable({ rows, loading, onDelete }: Props) {
   const { preferences } = usePreferences();
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>(null);
@@ -102,12 +121,18 @@ export function PaymentsTable({ rows, loading }: Props) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [page, setPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Settings choose the starting view; the toolbar overrides it for this visit.
   const view = viewOverride ?? preferences.paymentsView;
   const pageSize = pageSizeOverride ?? preferences.paymentsPageSize;
 
-  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+  const activeFilterCount = Object.entries(filters).filter(([key, value]) =>
+    key === "source" ? value !== "all" : Boolean(value),
+  ).length;
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -124,6 +149,8 @@ export function PaymentsTable({ rows, loading }: Props) {
       if (Number.isFinite(max) && amount > max) return false;
       if (filters.from && row.date < filters.from) return false;
       if (filters.to && row.date > filters.to) return false;
+      if (filters.source === "manual" && row.statementId) return false;
+      if (filters.source === "imported" && !row.statementId) return false;
       return true;
     });
   }, [rows, query, filters]);
@@ -157,6 +184,57 @@ export function PaymentsTable({ rows, loading }: Props) {
 
   function toggleSort(key: SortKey) {
     setSort((current) => nextSort(current, key));
+  }
+
+  // Selection is scoped to what the filters currently show, so a delete can
+  // never reach a row that has scrolled out from under the user.
+  const selectedRows = useMemo(
+    () => sorted.filter((row) => selectedIds.has(row.id)),
+    [sorted, selectedIds],
+  );
+  const selectedOnPage = pageRows.filter((row) => selectedIds.has(row.id)).length;
+
+  function toggleRow(id: string, checked: boolean) {
+    setConfirmingDelete(false);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function togglePage(checked: boolean) {
+    setConfirmingDelete(false);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const row of pageRows) {
+        if (checked) next.add(row.id);
+        else next.delete(row.id);
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+    setConfirmingDelete(false);
+    setDeleteError(null);
+  }
+
+  async function deleteSelected() {
+    const ids = selectedRows.map((row) => row.id);
+    if (ids.length === 0) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDelete(ids);
+      clearSelection();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Could not delete those payments");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   if (loading && rows.length === 0) {
@@ -238,6 +316,69 @@ export function PaymentsTable({ rows, loading }: Props) {
           />
         </div>
 
+        {selectedRows.length > 0 ? (
+          <div className="panel-flush flex flex-wrap items-center gap-x-3 gap-y-2 p-2.5">
+            <span className="font-mono text-[11px] uppercase tracking-[0.12em]">
+              {formatCount(selectedRows.length)} selected
+            </span>
+
+            {selectedRows.length < sorted.length ? (
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set(sorted.map((row) => row.id)))}
+                className="link-underline text-[12px] text-muted-foreground"
+              >
+                Select all {formatCount(sorted.length)} matching
+              </button>
+            ) : null}
+
+            <div className="ml-auto flex items-center gap-1.5">
+              {confirmingDelete ? (
+                <>
+                  <span className="text-[12px] text-oxblood">Delete permanently?</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={deleting}
+                    onClick={deleteSelected}
+                  >
+                    {deleting ? "Deleting…" : `Yes, delete ${formatCount(selectedRows.length)}`}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={deleting}
+                    onClick={() => setConfirmingDelete(false)}
+                  >
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirmingDelete(true)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={clearSelection}>
+                    Clear
+                  </Button>
+                </>
+              )}
+            </div>
+
+            {deleteError ? (
+              <p className="w-full text-[12px] text-oxblood">{deleteError}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {sort ? (
           <button
             type="button"
@@ -278,6 +419,15 @@ export function PaymentsTable({ rows, loading }: Props) {
               value={filters.to}
               onChange={(v) => setFilters((f) => ({ ...f, to: v }))}
             />
+            <div className="space-y-1.5">
+              <span className="eyebrow">Source</span>
+              <Segmented
+                label="Payment source"
+                value={filters.source}
+                onChange={(source) => setFilters((f) => ({ ...f, source }))}
+                options={SOURCES}
+              />
+            </div>
             {activeFilterCount ? (
               <button
                 type="button"
@@ -309,8 +459,14 @@ export function PaymentsTable({ rows, loading }: Props) {
       ) : view === "list" ? (
         <ul className="divide-y divide-border border-y border-border">
           {pageRows.map((row) => (
-            <li key={row.id} className="flex items-baseline justify-between gap-4 py-3">
-              <div className="min-w-0">
+            <li key={row.id} className="flex items-baseline gap-3 py-3">
+              <Checkbox
+                checked={selectedIds.has(row.id)}
+                onChange={(e) => toggleRow(row.id, e.target.checked)}
+                aria-label={`Select ${row.merchantDisplay}`}
+                className="mt-1"
+              />
+              <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] font-medium">{row.merchantDisplay}</p>
                 <p className="money mt-0.5 text-[11.5px] text-muted-foreground">
                   {formatDate(row.date)}
@@ -324,6 +480,14 @@ export function PaymentsTable({ rows, loading }: Props) {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-8">
+                <Checkbox
+                  checked={pageRows.length > 0 && selectedOnPage === pageRows.length}
+                  indeterminate={selectedOnPage > 0 && selectedOnPage < pageRows.length}
+                  onChange={(e) => togglePage(e.target.checked)}
+                  aria-label="Select every payment on this page"
+                />
+              </TableHead>
               <TableHead className="w-10 text-right">#</TableHead>
               <SortableHead sortKey="merchant" sort={sort} onSort={toggleSort} />
               <SortableHead sortKey="amount" sort={sort} onSort={toggleSort} align="right" />
@@ -332,7 +496,14 @@ export function PaymentsTable({ rows, loading }: Props) {
           </TableHeader>
           <TableBody>
             {pageRows.map((row, i) => (
-              <TableRow key={row.id}>
+              <TableRow key={row.id} data-state={selectedIds.has(row.id) ? "selected" : undefined}>
+                <TableCell className={cn(dense && "py-1.5")}>
+                  <Checkbox
+                    checked={selectedIds.has(row.id)}
+                    onChange={(e) => toggleRow(row.id, e.target.checked)}
+                    aria-label={`Select ${row.merchantDisplay}`}
+                  />
+                </TableCell>
                 <TableCell
                   className={cn(
                     "money text-right text-[11px] text-muted-foreground/70",

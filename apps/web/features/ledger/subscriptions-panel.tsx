@@ -55,6 +55,23 @@ function monthsAgo(days: number): string {
   return months >= 12 ? `${Math.round(months / 12)}y ago` : `${months} months ago`;
 }
 
+/** Say plainly what stopped this from going on the calendar by itself. */
+function reviewNote(sub: DetectedSubscription): string {
+  const last = `last charged ${formatDate(sub.lastChargeDate)}`;
+
+  if (sub.reviewReason === "stopped") {
+    return `${last} (${monthsAgo(sub.daysSinceLastCharge)})${
+      sub.cyclesMissed > 0 ? ` · ${sub.cyclesMissed} cycles missed` : ""
+    }`;
+  }
+  if (sub.reviewReason === "sparse") {
+    return `only ${sub.chargeCount} charges so far · ${formatDate(sub.firstPurchaseDate)} and ${formatDate(
+      sub.lastChargeDate,
+    )}`;
+  }
+  return `${sub.chargeCount} charges, roughly every ${sub.medianGapDays ?? sub.stepDays} days, but the billing date wanders · ${last}`;
+}
+
 export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect }: Props) {
   const { dismissed, confirmed, dismiss, confirm, reset, resetAll } = useSubscriptionOverrides();
   const [showReview, setShowReview] = useState(true);
@@ -73,9 +90,9 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
   if (subscriptions.length === 0) {
     return (
       <EmptyNote>
-        No subscriptions detected yet. A charge becomes a subscription once the same merchant bills
-        a steady amount on a steady cycle — three times on the same day of the month, or twice for
-        a service we recognise.
+        Nothing repeats yet. We look for the same merchant charging a steady amount on a steady
+        cycle — two charges are enough to raise a question here, three on the same day of the month
+        put it straight on the calendar.
       </EmptyNote>
     );
   }
@@ -92,7 +109,7 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
       ) : (
         <EmptyNote>
           {groups.review.length > 0
-            ? "Nothing is on the calendar yet. Every recurrence we found went quiet before your statements end — answer the question below and the ones you still pay for will appear here."
+            ? "Nothing is on the calendar yet — none of the repeats we found are clear-cut enough to schedule on their own. Look through the review list below and track the ones you actually pay for."
             : "Nothing is billing right now. Every recurrence we found has been struck off, so the calendar is clear."}
         </EmptyNote>
       )}
@@ -114,8 +131,8 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
         <GroupDisclosure
           open={showReview}
           onToggle={() => setShowReview((v) => !v)}
-          label={`${groups.review.length} went quiet — still paying?`}
-          hint="These billed on a cycle and then stopped. That usually means you cancelled, but it also happens when your imported statements simply end there. Say you still pay one and it goes straight back on the calendar."
+          label={`${groups.review.length} to review — subscriptions?`}
+          hint="These repeat, but not clearly enough to schedule on their own: too few charges yet, a billing date that wanders, or a cycle that stopped a while back. Track one and it goes straight on the calendar."
         >
           <ul className="divide-y divide-border border-y border-border">
             {groups.review.map((sub) => (
@@ -129,15 +146,13 @@ export function SubscriptionsPanel({ subscriptions, selected, charges, onSelect 
                     {sub.service}
                   </button>
                   <p className="money mt-1 text-[11.5px] text-muted-foreground">
-                    ${formatMoney(sub.amount)} {sub.cadence} · last charged{" "}
-                    {formatDate(sub.lastChargeDate)} ({monthsAgo(sub.daysSinceLastCharge)})
-                    {sub.cyclesMissed > 0 ? ` · ${sub.cyclesMissed} cycles missed` : ""}
+                    ${formatMoney(sub.amount)} {sub.cadence} · {reviewNote(sub)}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1.5">
                   <Button type="button" size="sm" variant="outline" onClick={() => confirm(sub.key)}>
                     <Check className="h-3.5 w-3.5" />
-                    Still paying
+                    Track it
                   </Button>
                   <Button type="button" size="sm" variant="ghost" onClick={() => remove(sub)}>
                     <Ban className="h-3.5 w-3.5" />

@@ -38,6 +38,16 @@ class RetrieveResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class DeleteEntriesBody(BaseModel):
+    """Bulk delete. Capped so one request cannot scan an unbounded id list."""
+
+    ids: list[UUID4] = Field(..., min_length=1, max_length=5_000)
+
+
+class DeleteEntriesResponse(BaseModel):
+    deleted: int
+
+
 class CreateStatementBody(BaseModel):
     filename: str = Field(..., min_length=1, max_length=512)
     page_count: int | None = Field(default=None, ge=0, le=10_000)
@@ -241,6 +251,47 @@ async def ingest(
             body.nonce,
         )
     return IngestResponse(id=new_id)
+
+
+@app.delete("/entries/{entry_id}", status_code=204)
+async def delete_entry(
+    entry_id: UUID4,
+    user_id: str = Depends(get_current_user_id),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            DELETE FROM public.ledger_entries
+            WHERE id = $1 AND user_id = $2::uuid
+            """,
+            entry_id,
+            str(user_id),
+        )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return None
+
+
+@app.post("/entries/delete", response_model=DeleteEntriesResponse)
+async def delete_entries(
+    body: DeleteEntriesBody,
+    user_id: str = Depends(get_current_user_id),
+) -> DeleteEntriesResponse:
+    """Clearing out a bad import row by row would be thousands of requests."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            DELETE FROM public.ledger_entries
+            WHERE user_id = $1::uuid AND id = ANY($2::uuid[])
+            """,
+            str(user_id),
+            body.ids,
+        )
+    # asyncpg reports "DELETE <n>"; anything else means nothing matched.
+    deleted = int(result.split()[1]) if result.startswith("DELETE ") else 0
+    return DeleteEntriesResponse(deleted=deleted)
 
 
 @app.get("/retrieve", response_model=RetrieveResponse)

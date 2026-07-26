@@ -145,7 +145,7 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         className="rise rise-2"
         eyebrow="Recurring"
         title="Subscriptions and what is due next"
-        description="A merchant becomes a subscription once it bills a steady amount on a steady cycle, and stops being one once it goes quiet for several cycles. Pick a row or a marked day to see every charge behind it, or strike one off if we read it wrong."
+        description="Merchants that bill a steady amount on a steady cycle go straight on the calendar. Anything that repeats less convincingly — two charges so far, a wandering billing date, a cycle that stopped — waits in the review list below for you to say whether you still pay it."
         aside={
           billingNow.length > 0 ? (
             <Badge variant="outline">{billingNow.length} billing</Badge>
@@ -167,10 +167,14 @@ export function LedgerDashboard({ accessToken, saltB64 }: Props) {
         description={
           activeStatement
             ? `Every payment imported from ${activeStatement.filename}. Search, sort and filter without leaving the page.`
-            : "One row per payment — merchant, amount, transaction date. Bank notices and $0 lines never make it in."
+            : "One row per payment — merchant, amount, transaction date. Tick any row to delete it; the filter panel narrows to manually added entries when you need to clear them out."
         }
       >
-        <PaymentsTable rows={visibleRows} loading={ledger.loadingRows} />
+        <PaymentsTable
+          rows={visibleRows}
+          loading={ledger.loadingRows}
+          onDelete={ledger.removeEntries}
+        />
       </Section>
 
       <Section

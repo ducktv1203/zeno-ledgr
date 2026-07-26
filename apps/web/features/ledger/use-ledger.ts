@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import wiki from "@/data/merchant-wiki.json";
 import {
   apiCreateStatement,
+  apiDeleteEntries,
   apiDeleteStatement,
   apiIngest,
   apiListStatements,
@@ -134,6 +135,20 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
     [accessToken, loadFirstPage],
   );
 
+  const removeEntries = useCallback(
+    async (ids: string[]) => {
+      if (!accessToken || ids.length === 0) return 0;
+      const deleted = await apiDeleteEntries(accessToken, ids);
+      // Drop them locally rather than re-fetching: a full reload decrypts the
+      // whole ledger again, which is slow once there are thousands of rows.
+      const gone = new Set(ids);
+      setRows((current) => current.filter((row) => !gone.has(row.id)));
+      void refreshStatements();
+      return deleted;
+    },
+    [accessToken, refreshStatements],
+  );
+
   return {
     rows,
     statements,
@@ -143,6 +158,7 @@ export function useLedger(accessToken: string | null, encryptionActive: boolean)
     addEntry,
     addEntries,
     removeStatement,
+    removeEntries,
     refreshStatements,
   };
 }
