@@ -49,7 +49,7 @@ export function StatStrip({
   return (
     <section className="grid gap-px border-y border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
       {stats.map((stat) => (
-        <div key={stat.label} className="bg-background px-4 py-5 first:pl-0">
+        <div key={stat.label} className="bg-background py-5 sm:px-4 sm:first:pl-0">
           <p className="eyebrow">{stat.label}</p>
           <p
             className={`figure mt-2.5 text-[2rem] leading-none ${
